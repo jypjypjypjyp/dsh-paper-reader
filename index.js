@@ -1468,6 +1468,9 @@ function registerPaperSkill(ctx) {
       name: PAPER_SKILL_NAME,
       description: PAPER_SKILL_DESCRIPTION,
       whenToUse: '读论文、写论文标注或笔记、跨会话接着上次的结论继续时',
+      // A loaded skill requires a string source; the registry keeps the provider
+      // label separate, so name the origin bucket explicitly.
+      source: 'runtime',
       content: PAPER_SKILL_BODY,
     }))
   })
