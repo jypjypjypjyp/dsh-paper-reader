@@ -490,6 +490,12 @@ async function paperFolder(id) {
   return { meta, settings, dir, pdfDir, mdDir, codeDir, pdfTarget, fileName }
 }
 
+/** Refresh the folder's notes.md after annotations or notes change elsewhere. */
+async function syncPaperNotes(meta) {
+  if (meta.workDir === '') return
+  await writeFile(join(meta.workDir, 'notes.md'), renderNotesMarkdown(meta)).catch(() => {})
+}
+
 async function paperBrief(id) {
   const folder = await paperFolder(id)
   await writeFile(join(folder.dir, 'notes.md'), renderNotesMarkdown(folder.meta)).catch(() => {})
@@ -1018,6 +1024,7 @@ async function handleApi(req, res, url, fence) {
       if (body.code !== null && typeof body.code === 'object') meta.code = normalizeCode(body.code)
       meta.updatedAt = Date.now()
       await writeMeta(meta)
+      if (Array.isArray(body.annotations) || Array.isArray(body.paperNotes)) await syncPaperNotes(meta)
       sendJson(res, 200, { ok: true, doc: summaryOf(meta) })
       return true
     }
@@ -1283,6 +1290,7 @@ async function runAnnotationTool(args, exec) {
     meta.annotations.push(annotation)
     meta.updatedAt = now
     await writeMeta(meta)
+    await syncPaperNotes(meta)
     return { ok: true, docId: id, created: { id: annotation.id, page: annotation.page, kind: annotation.kind } }
   }
 
@@ -1305,6 +1313,7 @@ async function runAnnotationTool(args, exec) {
     meta.paperNotes.push(note)
     meta.updatedAt = now
     await writeMeta(meta)
+    await syncPaperNotes(meta)
     return { ok: true, docId: id, created: { id: note.id, text: note.text } }
   }
 
@@ -1324,6 +1333,7 @@ async function runAnnotationTool(args, exec) {
     }
     meta.updatedAt = Date.now()
     await writeMeta(meta)
+    await syncPaperNotes(meta)
     return { ok: true, docId: id, notes: meta.paperNotes }
   }
 
@@ -1362,6 +1372,7 @@ async function runAnnotationTool(args, exec) {
     }
     meta.updatedAt = Date.now()
     await writeMeta(meta)
+    await syncPaperNotes(meta)
     return { ok: true, docId: id, id: annotationId }
   }
 

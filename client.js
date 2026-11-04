@@ -733,6 +733,87 @@ window.__ModuleLoader__.load({
 
     // ── page component ───────────────────────────────────────────────────────
 
+    /**
+     * Find where a quoted passage sits in a rendered text layer. Annotations the
+     * model writes carry no coordinates, so the quote itself is the anchor: the
+     * page's spans are walked into one string, the folded quote is matched in it
+     * with a bounded search, and the matched character range becomes rects.
+     * Returns rects normalized to 0..1, or an empty array when the quote is absent.
+     */
+    function locateQuote(pageElement, textLayer, quote) {
+      if (pageElement === null || textLayer === null) return [];
+      var needle = foldText(quote);
+      if (needle.length < 4) return [];
+      if (needle.length > 160) needle = needle.slice(0, 160);
+      var spans = Array.prototype.slice.call(textLayer.querySelectorAll("span"));
+      if (spans.length === 0) return [];
+      var flat = "";
+      var marks = [];
+      for (var i = 0; i < spans.length; i += 1) {
+        var raw = spans[i].textContent === null ? "" : spans[i].textContent;
+        for (var c = 0; c < raw.length; c += 1) marks.push({ span: i, char: c });
+        flat += raw;
+      }
+      var hay = foldText(flat);
+      if (hay.length === 0) return [];
+      // Quotes come from the parsed markdown, so glyphs can differ from the PDF
+      // (π vs 𝝅, ligatures, mangled symbols). Match the longest window that
+      // lands, then map the window back to the quote's own start.
+      var at = hay.indexOf(needle);
+      if (at < 0) {
+        for (var offset = 0; offset < needle.length - 12 && at < 0; offset += 8) {
+          var chunk = needle.slice(offset, offset + 40);
+          var hit = hay.indexOf(chunk);
+          if (hit >= 0) at = hit - offset;
+        }
+        if (at < 0) return [];
+      }
+      if (at < 0) return [];
+      if (at + needle.length > hay.length) needle = needle.slice(0, hay.length - at);
+      var box = pageElement.getBoundingClientRect();
+      if (box.width <= 0 || box.height <= 0) return [];
+      // The folded string drops whitespace, so map back through the same filter.
+      var startRaw = -1;
+      var endRaw = -1;
+      var kept = 0;
+      for (var k = 0; k < flat.length; k += 1) {
+        var ch = flat[k];
+        if (/\s/.test(ch)) continue;
+        if (kept === at) startRaw = k;
+        kept += 1;
+        if (kept === at + needle.length) { endRaw = k; break; }
+      }
+      if (startRaw < 0 || endRaw < 0) return [];
+      var rects = [];
+      var range = document.createRange();
+      var from = marks[startRaw];
+      var to = marks[endRaw];
+      if (from === undefined || to === undefined) return [];
+      try {
+        range.setStart(spans[from.span].firstChild, from.char);
+        range.setEnd(spans[to.span].firstChild, to.char + 1);
+      } catch (error) {
+        return [];
+      }
+      var pieces = range.getClientRects();
+      for (var r = 0; r < pieces.length; r += 1) {
+        var piece = pieces[r];
+        if (piece.width < 1 || piece.height < 1) continue;
+        var left = (piece.left - box.left) / box.width;
+        var top = (piece.top - box.top) / box.height;
+        var w = piece.width / box.width;
+        var h = piece.height / box.height;
+        if (left < -0.02 || top < -0.02 || left > 1.02 || top > 1.02) continue;
+        rects.push([Math.max(0, left), Math.max(0, top), Math.min(1, w), Math.min(1, h)]);
+        if (rects.length >= 40) break;
+      }
+      return rects;
+    }
+
+    function foldText(value) {
+      return String(value === null || value === undefined ? "" : value).replace(/\s+/g, "");
+    }
+
     function PdfPage(props) {
       var pdf = props.pdf;
       var pageNumber = props.pageNumber;
@@ -743,10 +824,17 @@ window.__ModuleLoader__.load({
       var highlightColor = props.highlightColor;
       var noteColor = props.noteColor;
       var flashId = props.flashId;
+      var wake = props.wake;
 
       var holderRef = useRef(null);
       var canvasRef = useRef(null);
       var textRef = useRef(null);
+      var derivedPair = useState({});
+      var derivedRects = derivedPair[0];
+      var setDerivedRects = derivedPair[1];
+      var tickPair = useState(0);
+      var readyTick = tickPair[0];
+      var setReadyTick = tickPair[1];
 
       useEffect(function () {
         if (!props.shouldRender) return undefined;
@@ -787,6 +875,7 @@ window.__ModuleLoader__.load({
             textDivs: []
           });
           await textTask.promise;
+          if (!cancelled) setReadyTick(function (previous) { return previous + 1; });
         })().catch(function (error) {
           if (error && error.name === "RenderingCancelledException") return;
           console.warn("[dsh-paper-reader] page render failed:", error);
@@ -796,12 +885,30 @@ window.__ModuleLoader__.load({
           try { if (renderTask !== null) renderTask.cancel(); } catch (error) { /* already done */ }
           try { if (textTask !== null) textTask.cancel(); } catch (error) { /* already done */ }
         };
-      }, [props.shouldRender, scale, pageNumber, pdf]);
+      }, [props.shouldRender, scale, pageNumber, pdf, wake]);
+
+      // Model-written annotations carry no coordinates, so anchor them by quote.
+      useEffect(function () {
+        var pageElement = holderRef.current;
+        var layer = textRef.current;
+        if (pageElement === null || layer === null) return;
+        var next = {};
+        annotations.forEach(function (annotation) {
+          if (annotation.rects !== undefined && annotation.rects.length > 0) return;
+          var quote = annotation.text !== "" ? annotation.text : annotation.note;
+          var found = locateQuote(pageElement, layer, quote);
+          if (found.length > 0) next[annotation.id] = found;
+        });
+        setDerivedRects(next);
+      }, [readyTick, annotations, scale, pageNumber]);
 
       return h(
         "div",
         {
-          ref: holderRef,
+          ref: function (element) {
+            holderRef.current = element;
+            if (props.onElement !== undefined) props.onElement(pageNumber, element);
+          },
           className: "pr-page",
           "data-pr-page": String(pageNumber),
           style: { width: Math.floor(width) + "px", height: Math.floor(height) + "px" }
@@ -812,8 +919,26 @@ window.__ModuleLoader__.load({
           "div",
           { className: "pr-hl-layer" },
           annotations.map(function (annotation) {
-            return annotation.rects.map(function (rect, index) {
-              var isNote = annotation.kind === "note";
+            var isNote = annotation.kind === "note";
+            var rects = annotation.rects !== undefined && annotation.rects.length > 0
+              ? annotation.rects
+              : (derivedRects[annotation.id] === undefined ? [] : derivedRects[annotation.id]);
+            if (rects.length === 0) {
+              // The quote was not found in the text layer: keep the annotation
+              // visible on its page as a corner badge instead of dropping it.
+              return h(
+                "div",
+                {
+                  key: annotation.id + "-badge",
+                  className: "pr-hl-badge"
+                    + (annotation.author === "ai" ? " pr-hl-badge-ai" : "")
+                    + (flashId === annotation.id ? " pr-hl-flash" : ""),
+                  title: annotation.note !== "" ? annotation.note : annotation.text
+                },
+                annotation.kind === "note" ? props.noteLabel : props.aiLabel
+              );
+            }
+            return rects.map(function (rect, index) {
               return h("div", {
                 key: annotation.id + "-" + index,
                 className: "pr-hl" + (isNote ? " pr-hl-note" : "") + (flashId === annotation.id ? " pr-hl-flash" : ""),
@@ -921,6 +1046,15 @@ window.__ModuleLoader__.load({
       var flashPair = useState(null);
       var flashId = flashPair[0];
       var setFlashId = flashPair[1];
+
+      var wakePair = useState(0);
+      var wake = wakePair[0];
+      var setWake = wakePair[1];
+
+      useEffect(function () {
+        if (visible === false) return;
+        setWake(function (previous) { return previous + 1; });
+      }, [visible]);
 
       var widthPair = useState(0);
       var availableWidth = widthPair[0];
@@ -1300,7 +1434,7 @@ window.__ModuleLoader__.load({
         setNotesOpen(false);
         setMoreOpen(false);
         setAtHint(false);
-        setPanelTab("notes");
+        setPanelTab("annotations");
         setTree(null);
         setCodeDraft(null);
         setSelection(null);
@@ -1387,6 +1521,49 @@ window.__ModuleLoader__.load({
         // eslint-disable-next-line react-hooks/exhaustive-deps
       }, [scope.sessionId]);
 
+      // Annotations written by the model (or another tab) land in the Host while
+      // this panel is open: poll the metadata, merge it, and follow the newest
+      // model annotation so the page it touches is on screen right away.
+      useEffect(function () {
+        if (docId === null) return undefined;
+        var seen = new Set(annotations.map(function (annotation) { return annotation.id; }));
+        var timer = window.setInterval(function () {
+          getJson(API_BASE + "doc?id=" + encodeURIComponent(docId)).then(function (body) {
+            var doc = body.doc;
+            if (doc === undefined) return;
+            var list = Array.isArray(doc.annotations) ? doc.annotations : [];
+            var fresh = list.filter(function (annotation) { return !seen.has(annotation.id); });
+            list.forEach(function (annotation) { seen.add(annotation.id); });
+            setAnnotations(list);
+            setMeta(function (previous) {
+              if (previous === null) return previous;
+              return Object.assign({}, previous, {
+                paperNotes: doc.paperNotes,
+                code: doc.code,
+                parse: doc.parse,
+                hasMarkdown: doc.hasMarkdown,
+                markdownHasImages: doc.markdownHasImages,
+                title: doc.title,
+                pageCount: doc.pageCount,
+                updatedAt: doc.updatedAt
+              });
+            });
+            setParse(doc.parse === undefined ? null : doc.parse);
+            var follow = fresh.filter(function (annotation) { return annotation.author === "ai"; })
+              .sort(function (a, b) { return a.createdAt - b.createdAt; })
+              .pop();
+            if (follow !== undefined) {
+              scrollToPage(follow.page, 0);
+              setFlashId(follow.id);
+              window.setTimeout(function () {
+                setFlashId(function (current) { return current === follow.id ? null : current; });
+              }, 2400);
+            }
+          }).catch(function () { /* the next tick retries */ });
+        }, 3000);
+        return function () { window.clearInterval(timer); };
+      }, [docId]);
+
       // Reopen the last paper only once the tab is visible: pdf.js resources can
       // stall while the sidebar tab sits in a throttled background tab.
       useEffect(function () {
@@ -1453,13 +1630,42 @@ window.__ModuleLoader__.load({
         // eslint-disable-next-line react-hooks/exhaustive-deps
       }, [pdf, pageSizes, availableWidth]);
 
+      function pageMetrics(page) {
+        if (pageSizes === null) return null;
+        var index = Math.min(Math.max(page, 1), pageSizes.length) - 1;
+        var size = pageSizes[index];
+        var height = size.height * ((availableWidth / size.width) * zoom);
+        return { index: index, width: size.width * ((availableWidth / size.width) * zoom), height: height };
+      }
+
+      /** Top offset of a page inside the scroll container, measured or computed. */
+      function pageOffset(page) {
+        var element = pageEls.current[page];
+        if (element !== undefined) return element.offsetTop;
+        if (pageSizes === null) return 0;
+        var offset = 0;
+        for (var n = 1; n < page; n += 1) {
+          var metrics = pageMetrics(n);
+          if (metrics === null) break;
+          offset += metrics.height + 12;
+        }
+        return offset;
+      }
+
       function scrollToPage(page, ratio) {
         var viewport = viewportRef.current;
-        var element = pageEls.current[page];
-        if (viewport === null || element === undefined) return;
-        var offset = element.offsetTop + (Number.isFinite(ratio) ? ratio : 0) * element.offsetHeight;
-        viewport.scrollTop = Math.max(0, offset - 8);
-        setCurrentPage(page);
+        if (viewport === null || pageSizes === null) return;
+        var target = Math.min(Math.max(page, 1), pageSizes.length);
+        var metrics = pageMetrics(target);
+        var share = Number.isFinite(ratio) ? Math.min(Math.max(ratio, 0), 1) : 0;
+        // The destination may sit outside the render window; widen it first so
+        // the page exists (with its text layer) by the time the scroll lands.
+        setRenderRange(function (previous) {
+          if (target >= previous[0] && target <= previous[1]) return previous;
+          return [Math.max(1, target - 1), Math.min(pageSizes.length, target + 1)];
+        });
+        viewport.scrollTop = Math.max(0, pageOffset(target) + share * (metrics === null ? 0 : metrics.height) - 8);
+        setCurrentPage(target);
       }
 
       function schedulePosition(page, ratio) {
@@ -1810,7 +2016,8 @@ window.__ModuleLoader__.load({
       }
 
       function revealAnnotation(annotation) {
-        goToPage(annotation.page);
+        // Jump without closing the panel: the row stays visible while the page moves.
+        if (pageSizes !== null) scrollToPage(Math.min(Math.max(annotation.page, 1), pageSizes.length), 0);
         setFlashId(annotation.id);
         setTimeout(function () { setFlashId(function (current) { return current === annotation.id ? null : current; }); }, 1800);
       }
@@ -2007,6 +2214,13 @@ window.__ModuleLoader__.load({
             highlightColor: HIGHLIGHT_COLOR,
             noteColor: NOTE_COLOR,
             flashId: flashId,
+            aiLabel: t("aiAuthor"),
+            noteLabel: t("noteKind"),
+            wake: wake,
+            onElement: function (number, element) {
+              if (element === null) delete pageEls.current[number];
+              else pageEls.current[number] = element;
+            },
             shouldRender: pageNumber >= renderRange[0] && pageNumber <= renderRange[1]
           });
         });
@@ -3089,6 +3303,8 @@ window.__ModuleLoader__.load({
       ".pr-note-new{align-self:flex-start}",
       ".pr-note-row-mark{flex:none;width:18px;text-align:center;font-size:10px;color:var(--dsw-alias-label-secondary)}",
       ".pr-note-row-open{background:none;border:0;font:inherit;text-align:left;cursor:pointer;padding:0}",
+      ".pr-hl-badge{position:absolute;right:-10px;top:6px;z-index:3;min-width:20px;height:18px;padding:0 5px;display:inline-flex;align-items:center;justify-content:center;border-radius:9px;background:var(--dsw-alias-brand-primary,#c96442);color:#fff;font-size:10px;line-height:1;box-shadow:0 1px 4px rgba(0,0,0,.25);cursor:default}",
+      ".pr-hl-badge-ai{background:var(--dsw-alias-brand-primary,#c96442)}",
       ".pr-note-row{display:flex;align-items:center;gap:6px;padding:5px 6px;border-radius:7px;cursor:pointer;min-width:0}",
       ".pr-note-row:hover{background:var(--dsw-alias-bg-layer-2)}",
       ".pr-note-row-text{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11.5px;color:var(--dsw-alias-label-primary)}",
