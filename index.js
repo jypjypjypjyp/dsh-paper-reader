@@ -14,7 +14,7 @@
  */
 import { spawn } from 'node:child_process'
 import { createReadStream } from 'node:fs'
-import { cp, mkdir, readFile, readdir, rename, rm, stat, unlink, writeFile } from 'node:fs/promises'
+import { appendFile, cp, mkdir, readFile, readdir, rename, rm, stat, unlink, writeFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
 import { dirname, extname, join, resolve, sep } from 'node:path'
@@ -1008,6 +1008,14 @@ async function handleApi(req, res, url, fence) {
         return true
       }
       const body = JSON.parse((await readBody(req, MAX_META_BODY)).toString('utf8') || '{}')
+      await appendFile(join(STORE_DIR, 'telemetry.jsonl'), JSON.stringify({
+        at: new Date().toISOString(),
+        kind: 'patch',
+        id,
+        keys: Object.keys(body),
+        annots: Array.isArray(body.annotations) ? body.annotations.length : null,
+        notes: Array.isArray(body.paperNotes) ? body.paperNotes.length : null
+      }) + '\n').catch(() => {})
       if (typeof body.title === 'string' && body.title.trim() !== '') meta.title = body.title.trim().slice(0, 300)
       if (Number.isInteger(body.pageCount) && body.pageCount > 0) meta.pageCount = body.pageCount
       if (Number.isInteger(body.lastPage) && body.lastPage > 0) meta.lastPage = body.lastPage
@@ -1016,6 +1024,12 @@ async function handleApi(req, res, url, fence) {
         meta.paperNotes = body.paperNotes.map(normalizePaperNote).filter(Boolean).slice(0, MAX_PAPER_NOTES)
       }
       if (Array.isArray(body.annotations)) {
+        // Guard: an empty list from a client that never loaded the annotations
+        // would erase them for everyone. Deleting the last one must say so.
+        if (body.annotations.length === 0 && meta.annotations.length > 0 && body.allowEmpty !== true) {
+          await appendFile(join(STORE_DIR, 'telemetry.jsonl'), JSON.stringify({ at: new Date().toISOString(), kind: 'patch-blocked-empty', id, kept: meta.annotations.length }) + '\n').catch(() => {})
+          body.annotations = meta.annotations
+        }
         meta.annotations = body.annotations
           .slice(0, MAX_ANNOTATIONS)
           .map(normalizeAnnotation)
@@ -1040,13 +1054,28 @@ async function handleApi(req, res, url, fence) {
     return true
   }
 
+  if (pathname === '/paper-reader/api/telemetry') {
+    if (req.method !== 'POST') {
+      sendError(res, 405, 'method not allowed', 'method-error')
+      return true
+    }
+    const raw = (await readBody(req, 16 * 1024)).toString('utf8')
+    let entry = null
+    try { entry = JSON.parse(raw) } catch { entry = { raw: raw.slice(0, 400) } }
+    await appendFile(join(STORE_DIR, 'telemetry.jsonl'), JSON.stringify({ at: new Date().toISOString(), ...entry }) + '\n').catch(() => {})
+    sendJson(res, 200, { ok: true })
+    return true
+  }
+
   if (pathname === '/paper-reader/api/version') {
     if (req.method !== 'GET') {
       sendError(res, 405, 'method not allowed', 'method-error')
       return true
     }
     const pkg = JSON.parse(await readFile(new URL('./package.json', import.meta.url), 'utf8').catch(() => '{}'))
-    sendJson(res, 200, { ok: true, version: typeof pkg.version === 'string' ? pkg.version : '' })
+    const version = typeof pkg.version === 'string' ? pkg.version : ''
+    await appendFile(join(STORE_DIR, 'telemetry.jsonl'), JSON.stringify({ at: new Date().toISOString(), kind: 'version', version }) + '\n').catch(() => {})
+    sendJson(res, 200, { ok: true, version })
     return true
   }
 
@@ -1211,12 +1240,11 @@ async function handleApi(req, res, url, fence) {
 // ── model-facing annotation tool ─────────────────────────────────────────────
 
 const ANNOTATION_TOOL_DESCRIPTION = [
-  'Read and write the paper reader\'s annotations (highlights and page notes) across sessions.',
-  'Papers live in the reader sidebar tab; annotations are the durable, human-and-AI shared memory of what was read.',
-  'Use action="list" without docId to see the library, with docId to read one paper\'s annotations and notes; then action="create" to leave an annotation the human will see in the reader at that page.',
-  'Two layers of memory: an annotation is anchored to one page and carries the quoted text, a paper-level note (action="note") is a standalone sentence about the paper as a whole.',
-  'Keep both short: one sentence, 40 characters or fewer, conclusions and evidence only — never restate the paper.',
-  'Use action="code" with docId and repo/path to record the code repository that implements a paper; without repo it returns the current link and the paper title.',
+  "Read and write one paper's annotations, highlights and paper-level notes; they are the durable shared memory of what was read.",
+  'action="list" without docId lists the library; with docId it returns that paper\'s paths (pdf / markdown / code), annotations and notes — call it first to see whether the paper was already read.',
+  'action="create" appends annotations, either one (page/text/note/kind) or a batch via items; text is the quoted passage, note is the judgement.',
+  'action="update"/"delete" change one annotation by id; action="note"/"update_note"/"delete_note" manage paper-level notes (write four structured notes per paper, not one-liners).',
+  'action="code" reads or records the repository that implements the paper (repo URL and/or local path).',
 ].join(' ')
 
 function toolText(value) {
@@ -1256,12 +1284,14 @@ async function runAnnotationTool(args, exec) {
 
         createdAt: annotation.createdAt,
       }))
+    const brief = await paperBrief(id)
     return {
       ok: true,
       docId: id,
       title: meta.title,
       pageCount: meta.pageCount,
       code: meta.code,
+      paths: brief === undefined ? null : { dir: brief.path, pdf: brief.pdf, markdown: brief.markdown, code: brief.code },
       annotations,
       notes: meta.paperNotes.map((note) => ({
         id: note.id,
@@ -1275,28 +1305,38 @@ async function runAnnotationTool(args, exec) {
   if (action === 'create') {
     const id = docId(args.docId)
     if (id === undefined) throw Object.assign(new Error('create needs a docId from action="list"'), { status: 400 })
-    const text = typeof args.text === 'string' ? args.text.trim() : ''
-    const note = typeof args.note === 'string' ? args.note.trim() : ''
-    if (text === '' && note === '') throw Object.assign(new Error('create needs text or note'), { status: 400 })
+    const items = Array.isArray(args.items) ? args.items : []
+    const batch = items.length > 0 ? items : [{ page: args.page, text: args.text, note: args.note, kind: args.kind }]
+    if (batch.length > 200) throw Object.assign(new Error(`create accepts at most ${MAX_ANNOTATIONS} items`), { status: 400 })
     const meta = await readMeta(id)
-    if (meta.annotations.length >= MAX_ANNOTATIONS) throw Object.assign(new Error('annotation limit reached'), { status: 409 })
     const now = Date.now()
-    const annotation = normalizeAnnotation({
-      kind: typeof args.kind === 'string' ? args.kind : 'note',
-      page: Number.isInteger(args.page) && args.page > 0 ? Math.min(args.page, meta.pageCount ?? args.page) : 1,
-      text,
-      note,
-      color: '',
-      author: 'ai',
-      createdAt: now,
-      updatedAt: now,
-    })
-    if (annotation === undefined) throw Object.assign(new Error('annotation could not be normalized'), { status: 400 })
-    meta.annotations.push(annotation)
+    const created = []
+    for (const item of batch) {
+      if (item === null || typeof item !== 'object') continue
+      const text = typeof item.text === 'string' ? item.text.trim() : ''
+      const note = typeof item.note === 'string' ? item.note.trim() : ''
+      if (text === '' && note === '') continue
+      if (meta.annotations.length >= MAX_ANNOTATIONS) break
+      const page = Number.isInteger(item.page) && item.page > 0 ? Math.min(item.page, meta.pageCount ?? item.page) : 1
+      const annotation = normalizeAnnotation({
+        kind: item.kind === 'highlight' ? 'highlight' : 'note',
+        page,
+        text,
+        note,
+        color: '',
+        author: 'ai',
+        createdAt: now,
+        updatedAt: now,
+      })
+      if (annotation === undefined) continue
+      meta.annotations.push(annotation)
+      created.push({ id: annotation.id, page: annotation.page, kind: annotation.kind })
+    }
+    if (created.length === 0) throw Object.assign(new Error('create needs text or note'), { status: 400 })
     meta.updatedAt = now
     await writeMeta(meta)
     await syncPaperNotes(meta)
-    return { ok: true, docId: id, created: { id: annotation.id, page: annotation.page, kind: annotation.kind } }
+    return { ok: true, docId: id, created }
   }
 
   if (action === 'note') {
@@ -1400,6 +1440,21 @@ function registerAnnotationTool(ctx) {
           docId: { type: 'string', description: 'paper id from action="list"' },
           id: { type: 'string', description: 'annotation id, for update/delete' },
           page: { type: 'integer', description: '1-based page number' },
+          items: {
+            type: 'array',
+            description: 'for action="create": write several annotations in one call',
+            items: {
+              type: 'object',
+              properties: {
+                page: { type: 'integer', description: '1-based page number' },
+                text: { type: 'string', description: 'the quoted passage, <=200 chars' },
+                note: { type: 'string', description: 'your judgement on that passage, one sentence' },
+                kind: { type: 'string', enum: ['note', 'highlight'] },
+              },
+              required: ['page'],
+              additionalProperties: false,
+            },
+          },
           kind: { type: 'string', enum: ['note', 'highlight'], description: 'annotation kind, defaults to note' },
           repo: { type: 'string', description: 'for action="code": open-source repository URL of this paper\'s implementation' },
           path: { type: 'string', description: 'for action="code": local directory holding the implementation' },
@@ -1437,42 +1492,68 @@ function registerAnnotationTool(ctx) {
 
 const PAPER_SKILL_NAME = 'dsh-paper-reading'
 
-const PAPER_SKILL_DESCRIPTION = '读论文时用标注与笔记做跨会话记忆：paper_annotations 怎么调、什么时候写、写多短。'
+const PAPER_SKILL_DESCRIPTION = '读一篇论文并把它读成标注与笔记：已读判断、逐节标注、论文级大笔记的完整工作流。'
 
-const PAPER_SKILL_BODY = `# 论文阅读：标注与笔记作为跨会话记忆
+const PAPER_SKILL_BODY = `# 论文阅读：把读到的内容写进标注与笔记
 
-每篇论文的工作目录里有：\`pdf/<名>.pdf\` 原文、\`markdown/paper.md\`（解析正文，可能带 \`markdown/images/\`）、\`code/\` 本地实现。解析产物可能为空，原文永远在。
+每篇论文的目录里有 \`pdf/\`、\`markdown/paper.md\`（可能带 \`images/\`）、\`code/\`。
+用 \`paper_annotations (action="list", docId)\` 拿到的 \`paths\` 指向它们。
 
-## 工具
+## 一、先查已读，再决定读不读
 
-\`paper_annotations\` 是读写记忆的唯一入口。
+1. \`list\`（不带 docId）：拿到这篇的 docId、页数、标注与笔记数量。
+2. \`list\`（带 docId）：读全部 annotations、notes 与 paths。
+3. 判定已读：notes 里有「已读」那条，且它覆盖了你要回答的章节与页码。
+   - 已读且覆盖：直接用标注与笔记回答，附页码，**不重读**。
+   - 只覆盖一部分：只补缺的章节，不从第一页重来。
+   - 没读过：走下面的完整流程。
 
-- \`list\`：不带 \`docId\` 列论文库（标题、页数、标注/笔记数、解析状态）；带 \`docId\` 读该篇全部 annotations 与 notes。
-- \`create\`：写一条标注，\`docId\` + \`page\` + \`text\`（原文引句）+ \`note\`（判断）。
-- \`update\` / \`delete\`：按 \`id\` 改或删标注。
-- \`note\`：写论文级笔记，\`docId\` + \`note\`；\`update_note\` / \`delete_note\` 按 \`id\`。
-- \`code\`：读或写该论文的代码仓库（\`repo\` 开源地址、\`path\` 本地目录）。
+## 二、读
 
-## 怎么用
+读 \`paths.markdown\`；没有 markdown 就提示用户在阅读器里点解析，或按 PDF 页读。
+按节推进：摘要 → 引言 → 方法 → 实验 → 局限与结论。**每节读完立刻落标注**，不要攒到最后一起写。
+关键图（架构图、主结果、消融）在 \`markdown/images/\` 里，读到图所在小节时单独看一遍再标；公式与表格的数字直接引用原文。
 
-1. 接手新会话：先 \`list\` 看库里有什么；带 \`docId\` 读该篇的标注与笔记，据此决定要不要读全文，别从零重读。
-2. 需要原文细节：读 \`markdown/paper.md\`，按小节取用。
-3. 得出能改变判断的结论：挂原文用 \`create\`，论文级判断用 \`note\`。
-4. 用户说「记一下」：当场写，不要拖到会话结束。
+## 三、标注：细节索引
 
-## 写作规则
+每条锚在它说的那一页（PDF 页码，不是 markdown 行号）。
+- \`text\`：原文引句，挑能自证的那句，不超过 200 字。
+- \`note\`：你的判断，一句话、不超过 40 字，写「这说明了什么」，不写「作者写了什么」。
+- \`kind\`：\`highlight\` 用于能选中的正文；\`note\` 用于页级观察（图表、页边结论）。
+- 覆盖面：每节 1–3 条；方法的关键步骤、实验的关键数字与对照组必须有。
+- 一条结论对应一条标注，不重复标同一处。
 
-- 一句话，不超过 40 字，只写结论与依据。
-- 标注的 \`text\` 是原文引句（不超过 200 字），\`note\` 是你的判断。
-- 笔记不复述论文，写「这篇证明了什么」「我该怎么用」。
-- 不写推测、待验证的想法、推导过程、与论文无关的闲聊。
+一次用 \`items\` 提交 5–10 条，比一条一调省往返。
 
-## 不该做的
+不标：目录、致谢、纯背景铺垫、同一结论的重复表述。
 
-- 不要为留痕而写：每段都标注等于没有标注。
-- 不要把整段原文抄进 note。
-- 不要用 \`code\` 存仓库以外的内容。
-`
+## 四、大笔记：按块写，一篇论文一组
+
+读完立刻写，**一块一条**（\`action="note"\`），标题就用方括号开头，六块齐全：
+
+1. **【论文简介】** 解决什么问题、用什么方法、结论有多强（真机？大规模？单一任务？）。
+2. **【方法骨架】** 3–5 步或模块，写清输入输出与依赖顺序；关键设计选择说清为什么这么做。
+3. **【关键证据】** 支撑结论的实验与数字：对照对象、指标、提升幅度、失效条件。
+4. **【正反辩论】** 2–4 组，每组三行：\`正方：…\` / \`反方：…\` / \`裁决：…\`。
+   - 问题钉在具体设计或数字上，不写「方法是否通用」这类空话。
+   - 反方要能扎人：指假设漏洞、实验缺失、隐性优势、替代解释。
+   - 裁决给条件性结论：在什么条件下正方成立，什么条件下反方占优。
+5. **【怎么用】** 可复用点、和当前工作的接口、需要自己验证的地方。
+6. **【已读】** \`已读 p1-pN；覆盖 X 节；未读 附录\`——下次靠它判断要不要重读。
+
+每条 2–5 句。大笔记不是摘要：写判断与取舍，让没读过的人也能据此行动。
+同一篇论文只有这一组，不要写第二遍；有新认识就 \`update_note\` 改对应的那块。
+
+## 五、回答
+
+细节问题先查标注与大笔记，不够再回原文补。答案里带页码，用户在阅读器里能直接点过去。
+
+## 不该做
+
+- 只写 40 字的大笔记——大笔记要能撑起整篇判断。
+- 每段都标（噪音），或标了却不写 note（等于没读）。
+- 已覆盖的章节反复读、重复写。
+`;
 
 /** Advertise the cross-session memory skill from this plugin's own runtime. */
 function registerPaperSkill(ctx) {

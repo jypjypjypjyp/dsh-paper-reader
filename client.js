@@ -157,6 +157,9 @@ window.__ModuleLoader__.load({
         ask: "提问",
         noteTitle: "添加笔记",
         editNoteTitle: "编辑笔记",
+        hlCardEmpty: "还没有笔记，点「编辑笔记」写一条",
+        copied: "已复制链接",
+        copyFailed: "浏览器未允许写入剪贴板，请手动复制：",
         notePlaceholder: "写下对这段内容的理解、疑问或联想…",
         quote: "选段",
         save: "保存",
@@ -217,6 +220,7 @@ window.__ModuleLoader__.load({
         notesTab: "标注",
         paperNotesTab: "笔记",
         jumpToPage: "跳到这一页",
+        jumpToast: "正在跳到第 {page} 页",
         newPaperNote: "新建笔记",
         paperNotePlaceholder: "一句话结论，不超过 40 字",
         noPaperNotes: "还没有笔记。读到结论时记一句，下次会话直接可读。",
@@ -268,6 +272,9 @@ window.__ModuleLoader__.load({
         ask: "Ask",
         noteTitle: "Add a note",
         editNoteTitle: "Edit note",
+        hlCardEmpty: "No note yet — use Edit note to add one",
+        copied: "Link copied",
+        copyFailed: "Clipboard write was blocked; copy manually:",
         notePlaceholder: "Write down what this passage makes you think…",
         quote: "Selection",
         save: "Save",
@@ -328,6 +335,7 @@ window.__ModuleLoader__.load({
         notesTab: "Annotations",
         paperNotesTab: "Notes",
         jumpToPage: "Jump to this page",
+        jumpToast: "Jumping to page {page}",
         newPaperNote: "New note",
         paperNotePlaceholder: "One-sentence takeaway, 40 characters or fewer",
         noPaperNotes: "No notes yet. Jot one line when a conclusion lands; the next session reads it.",
@@ -951,6 +959,7 @@ window.__ModuleLoader__.load({
             return rects.map(function (rect, index) {
               return h("div", {
                 key: annotation.id + "-" + index,
+                "data-pr-annotation": annotation.id,
                 className: "pr-hl" + (isNote ? " pr-hl-note" : "") + (flashId === annotation.id ? " pr-hl-flash" : ""),
                 style: {
                   left: (rect[0] * 100).toFixed(3) + "%",
@@ -1054,6 +1063,9 @@ window.__ModuleLoader__.load({
       var setConfirmId = confirmPair[1];
 
       var flashPair = useState(null);
+      var hlCardPair = useState(null);
+      var hlCard = hlCardPair[0];
+      var setHlCard = hlCardPair[1];
       var flashId = flashPair[0];
       var setFlashId = flashPair[1];
 
@@ -1111,6 +1123,9 @@ window.__ModuleLoader__.load({
       var autoOpenRef = useRef(false);
       var scrollFrame = useRef(0);
       var annotationsRef = useRef([]);
+      var rootRef = useRef(null);
+      var lastRevealAt = useRef(0);
+      var revealRef = useRef(null);
       var parseTimer = useRef(null);
       var atHintSeen = useRef({});
       var codeTimer = useRef(null);
@@ -1648,11 +1663,34 @@ window.__ModuleLoader__.load({
           log.push(entry);
           localStorage.setItem(key, JSON.stringify(log.slice(-20)));
         } catch (error) { /* private mode */ }
+        try {
+          fetch(API_BASE + "telemetry", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(entry),
+            keepalive: true
+          }).catch(function () { /* offline */ });
+        } catch (error) { /* fetch unavailable */ }
       }
 
-      function scrollToPage(page, ratio) {
+      function nearestScroller(node) {
+        var current = node === null || node === undefined ? null : node.parentElement;
+        while (current !== null) {
+          var style = window.getComputedStyle(current);
+          if (/(auto|scroll|overlay)/.test(style.overflowY) && current.scrollHeight > current.clientHeight + 4) {
+            return current;
+          }
+          current = current.parentElement;
+        }
+        var root = document.scrollingElement || document.documentElement;
+        if (root !== null && root !== undefined && root.scrollHeight > root.clientHeight + 4) return root;
+        return null;
+      }
+
+      function scrollToPage(page, ratio, attempt) {
         var viewport = viewportRef.current;
         if (viewport === null || pageSizes === null) {
+          showToast(viewport === null ? "视图未挂载，稍后再试" : "页面尺寸还没准备好，稍后再试");
           logJump({ at: Date.now(), page: page, skip: viewport === null ? "no-viewport" : "no-sizes" });
           return;
         }
@@ -1665,29 +1703,40 @@ window.__ModuleLoader__.load({
           if (target >= previous[0] && target <= previous[1]) return previous;
           return [Math.max(1, target - 1), Math.min(pageSizes.length, target + 1)];
         });
-        // If the viewport itself is not the scroller (some hosts scroll an ancestor),
-        // fall back to the nearest ancestor that actually has overflow.
-        var scroller = viewport;
-        if (scroller.scrollHeight <= scroller.clientHeight + 4) {
-          var node = viewport.parentElement;
-          while (node !== null && node !== document.body) {
-            if (node.scrollHeight > node.clientHeight + 4) { scroller = node; break; }
-            node = node.parentElement;
+        var tries = attempt === undefined ? 0 : attempt;
+        var element = pageEls.current[target];
+        var scroller = element !== undefined ? nearestScroller(element) : viewport;
+        var before = element !== undefined ? Math.round(element.getBoundingClientRect().top) : 0;
+        if (element !== undefined) {
+          // Let the browser find the real scroller (viewport, wrapper, or document).
+          try {
+            element.scrollIntoView({ block: "start", inline: "nearest", behavior: "auto" });
+          } catch (error) {
+            element.scrollIntoView(true);
+          }
+          if (scroller !== null) {
+            if (share > 0) scroller.scrollTop += share * (metrics === null ? 0 : metrics.height);
+            scroller.scrollTop = Math.max(0, scroller.scrollTop - 8);
+          }
+        } else {
+          scroller.scrollTop = Math.max(0, pageOffset(target) + share * (metrics === null ? 0 : metrics.height) - 8);
+          if (tries >= 3) showToast("第 " + target + " 页还没渲染出来，稍后再试");
+          if (tries < 3) {
+            window.setTimeout(function () { scrollToPage(target, share, tries + 1); }, 90);
           }
         }
-        var before = scroller.scrollTop;
-        scroller.scrollTop = Math.max(0, pageOffset(target) + share * (metrics === null ? 0 : metrics.height) - 8);
         setCurrentPage(target);
         logJump({
           at: Date.now(),
           page: target,
-          el: pageEls.current[target] !== undefined,
+          el: element !== undefined,
+          tries: tries,
           offset: Math.round(pageOffset(target)),
-          before: Math.round(before),
-          after: Math.round(scroller.scrollTop),
-          scroller: scroller === viewport ? "viewport" : (scroller.className || scroller.tagName || "?").toString().slice(0, 40),
-          clientHeight: scroller.clientHeight,
-          scrollHeight: scroller.scrollHeight,
+          before: before,
+          after: element !== undefined ? Math.round(element.getBoundingClientRect().top) : Math.round(scroller.scrollTop),
+          scroller: scroller === null ? "none" : (scroller === viewport ? "viewport" : (scroller === document.scrollingElement ? "document" : (scroller.className || scroller.tagName || "?").toString().slice(0, 40))),
+          clientHeight: scroller === null ? 0 : scroller.clientHeight,
+          scrollHeight: scroller === null ? 0 : scroller.scrollHeight,
           width: Math.round(availableWidth)
         });
       }
@@ -1737,7 +1786,7 @@ window.__ModuleLoader__.load({
           if (id !== null) {
             saveTimer.current = setTimeout(function () {
               if (docIdRef.current !== id) return;
-              patchDoc(id, { annotations: next }).catch(function (errorValue) {
+              patchDoc(id, { annotations: next, allowEmpty: next.length === 0 }).catch(function (errorValue) {
                 console.warn("[dsh-paper-reader] annotation save failed:", errorValue);
                 showToast(textOf(langOf(ctx), "saveFailed"));
               });
@@ -2039,11 +2088,45 @@ window.__ModuleLoader__.load({
       }
 
       function revealAnnotation(annotation) {
-        // Jump without closing the panel: the row stays visible while the page moves.
+        // The pointer listener and React's onClick can both fire for one gesture.
+        var nowMs = Date.now();
+        if (nowMs - lastRevealAt.current < 200) return;
+        lastRevealAt.current = nowMs;
+        // A jump means looking at the document: the panel is drawn on top of the
+        // pages, so leaving it open hides the scroll and looks like nothing moved.
+        if (notesOpen) setNotesOpen(false);
+        if (libraryOpen) setLibraryOpen(false);
+        showToast(formatString(t("jumpToast"), { page: annotation.page }));
         if (pageSizes === null) logJump({ at: Date.now(), page: annotation.page, skip: "reveal-no-sizes" });
         else scrollToPage(Math.min(Math.max(annotation.page, 1), pageSizes.length), 0);
         setFlashId(annotation.id);
         setTimeout(function () { setFlashId(function (current) { return current === annotation.id ? null : current; }); }, 1800);
+      }
+
+      function copyLocationLink(annotation) {
+        var id = meta === null ? "" : meta.id;
+        var link = "paper://" + id + "@p" + annotation.page;
+        function done(ok) {
+          showToast(ok ? t("copied") + " " + link : t("copyFailed") + " " + link);
+        }
+        function fallback() {
+          var field = document.createElement("textarea");
+          field.value = link;
+          field.setAttribute("readonly", "");
+          field.style.position = "fixed";
+          field.style.left = "-9999px";
+          document.body.appendChild(field);
+          field.select();
+          var ok = false;
+          try { ok = document.execCommand("copy"); } catch (error) { ok = false; }
+          document.body.removeChild(field);
+          done(ok);
+        }
+        if (navigator.clipboard !== undefined && typeof navigator.clipboard.writeText === "function") {
+          navigator.clipboard.writeText(link).then(function () { done(true); }, fallback);
+          return;
+        }
+        fallback();
       }
 
       function changeZoom(delta) {
@@ -2361,6 +2444,17 @@ window.__ModuleLoader__.load({
         showToast(ok ? t("askQueued") : t("askFailed"));
       }
 
+      // A paper note opens with a block label: 【论文简介】… or 价值：…; the label
+      // is rendered bold and the rest follows inline.
+      function blockOf(text) {
+        var source = typeof text === "string" ? text : "";
+        var enclosed = /^【([^】]{1,16})】\s*([\s\S]*)$/.exec(source);
+        if (enclosed !== null) return { label: "【" + enclosed[1] + "】", body: enclosed[2] };
+        var prefixed = /^([^：:\n]{2,10})[：:]\s*([\s\S]*)$/.exec(source);
+        if (prefixed !== null) return { label: prefixed[1] + "：", body: prefixed[2] };
+        return { label: "", body: "" };
+      }
+
       function renderPaperNotesBody() {
         var notes = meta === null || !Array.isArray(meta.paperNotes) ? [] : meta.paperNotes;
         var rows = notes.slice().sort(function (a, b) { return b.updatedAt - a.updatedAt; });
@@ -2410,14 +2504,26 @@ window.__ModuleLoader__.load({
                     { className: "pr-note-row", key: note.id },
                     h("span", { className: "pr-note-row-mark" }, note.author === "ai" ? "AI" : "·"),
                     h(
-                      "button",
+                      "div",
                       {
-                        type: "button",
+                        role: "button",
+                        tabIndex: 0,
                         className: "pr-note-row-text pr-note-row-open",
-                        title: note.text,
-                        onClick: function () { setNoteDraft({ id: note.id, text: note.text }); }
+                        title: t("editNoteTitle"),
+                        onClick: function () { setNoteDraft({ id: note.id, text: note.text }); },
+                        onKeyDown: function (event) {
+                          if (event.key === "Enter" || event.key === " ") {
+                            event.preventDefault();
+                            setNoteDraft({ id: note.id, text: note.text });
+                          }
+                        }
                       },
-                      note.text
+                      blockOf(note.text).label !== ""
+                        ? [
+                            h("span", { key: "t", className: "pr-note-block-title" }, blockOf(note.text).label),
+                            h("span", { key: "b" }, " " + blockOf(note.text).body)
+                          ]
+                        : note.text
                     ),
                     h(
                       "div",
@@ -2441,15 +2547,19 @@ window.__ModuleLoader__.load({
           ordered.map(function (annotation) {
             var isNote = annotation.kind === "note";
             var isAi = annotation.author === "ai";
-            var primary = isNote && annotation.note !== "" ? annotation.note : annotation.text;
+            var noteText = typeof annotation.note === "string" ? annotation.note : "";
+            // One layout for every row: the quoted passage first, the note under it,
+            // whoever wrote it.
+            var primary = annotation.text !== "" ? annotation.text : noteText;
             if (primary === "") primary = isNote ? t("noteKind") : t("highlightKind");
-            var tooltip = annotation.text + (annotation.note !== "" ? "\n\n" + annotation.note : "");
+            var tooltip = annotation.text + (noteText !== "" ? "\n\n" + noteText : "");
             return h(
               "div",
               {
                 key: annotation.id,
                 className: "pr-note-row",
                 title: tooltip,
+                "data-pr-annotation": annotation.id,
                 onClick: function () { revealAnnotation(annotation); }
               },
               h(
@@ -2458,7 +2568,13 @@ window.__ModuleLoader__.load({
                   type: "button",
                   className: "pr-page-chip pr-page-chip-btn",
                   title: t("jumpToPage"),
-                  onClick: function (event) { event.stopPropagation(); revealAnnotation(annotation); }
+                  onClick: function (event) { event.stopPropagation(); revealAnnotation(annotation); },
+                  onKeyDown: function (event) {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      revealAnnotation(annotation);
+                    }
+                  }
                 },
                 t("page").replace("{n}", String(annotation.page)) + " ↗"
               ),
@@ -2468,7 +2584,14 @@ window.__ModuleLoader__.load({
                 isNote ? h(Icon, { name: "pencil", size: 11 }) : h(Icon, { name: "marker", size: 11 })
               ),
               isAi ? h("span", { className: "pr-author pr-author-ai" }, t("aiAuthor")) : null,
-              h("span", { className: "pr-note-row-text" }, primary),
+              h(
+                "div",
+                { className: "pr-note-row-main" },
+                h("span", { className: "pr-note-row-text" }, primary),
+                noteText !== "" && annotation.text !== ""
+                  ? h("span", { className: "pr-note-row-quote pr-note-row-note" }, noteText)
+                  : null
+              ),
               h(
                 "span",
                 { className: "pr-note-row-actions" },
@@ -2478,7 +2601,13 @@ window.__ModuleLoader__.load({
                     type: "button",
                     className: "pr-icon-btn pr-icon-btn-sm pr-icon-btn-jump",
                     title: t("jumpToPage"),
-                    onClick: function (event) { event.stopPropagation(); revealAnnotation(annotation); }
+                    onClick: function (event) { event.stopPropagation(); revealAnnotation(annotation); },
+                    onKeyDown: function (event) {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        revealAnnotation(annotation);
+                      }
+                    }
                   },
                   h(Icon, { name: "locate", size: 12 })
                 ),
@@ -2492,18 +2621,16 @@ window.__ModuleLoader__.load({
                   },
                   h(Icon, { name: "link", size: 12 })
                 ),
-                isNote
-                  ? h(
-                      "button",
-                      {
-                        type: "button",
-                        className: "pr-icon-btn pr-icon-btn-sm",
-                        title: t("editNoteTitle"),
-                        onClick: function (event) { event.stopPropagation(); editNote(annotation); }
-                      },
-                      h(Icon, { name: "pencil", size: 12 })
-                    )
-                  : null,
+                h(
+                  "button",
+                  {
+                    type: "button",
+                    className: "pr-icon-btn pr-icon-btn-sm",
+                    title: t("editNoteTitle"),
+                    onClick: function (event) { event.stopPropagation(); editNote(annotation); }
+                  },
+                  h(Icon, { name: "pencil", size: 12 })
+                ),
                 h(
                   "button",
                   {
@@ -2884,6 +3011,142 @@ window.__ModuleLoader__.load({
         );
       }
 
+      // Pointer path for jumping: some environments deliver pointerdown/up but
+      // never a click on the row, so bind the gesture instead of the click.
+      useEffect(function () {
+        var pressed = null;
+        function rowOf(node) {
+          return node !== null && node !== undefined && typeof node.closest === "function"
+            ? node.closest("[data-pr-annotation]")
+            : null;
+        }
+        function onDown(event) {
+          pressed = null;
+          var row = rowOf(event.target);
+          var host = rootRef.current;
+          if (row === null || host === null || !host.contains(row)) return;
+          var button = typeof event.target.closest === "function" ? event.target.closest("button") : null;
+          if (button !== null && button.classList.contains("pr-icon-btn") && !button.classList.contains("pr-icon-btn-jump")) return;
+          pressed = { id: row.getAttribute("data-pr-annotation"), at: Date.now() };
+        }
+        function onUp(event) {
+          var pending = pressed;
+          pressed = null;
+          if (pending === null || Date.now() - pending.at > 2500) return;
+          var row = rowOf(event.target);
+          if (row !== null && row.getAttribute("data-pr-annotation") !== pending.id) return;
+          var list = annotationsRef.current === undefined || annotationsRef.current === null ? [] : annotationsRef.current;
+          for (var index = 0; index < list.length; index += 1) {
+            if (list[index].id === pending.id) {
+              // A listener bound once sees the first render's closure, whose
+              // pageSizes is still null — always go through the live function.
+              logJump({ at: Date.now(), page: list[index].page, via: "pointer" });
+              if (revealRef.current !== null) revealRef.current(list[index]);
+              return;
+            }
+          }
+        }
+        document.addEventListener("pointerdown", onDown, true);
+        document.addEventListener("pointerup", onUp, true);
+        return function () {
+          document.removeEventListener("pointerdown", onDown, true);
+          document.removeEventListener("pointerup", onUp, true);
+        };
+      }, []);
+
+      // A click on a highlight opens its note card: the text layer stays on top,
+      // so hit-test the highlight rects instead of the spans.
+      useEffect(function () {
+        function onDocClick(event) {
+          var target = event.target;
+          if (target !== null && target !== undefined && typeof target.closest === "function" && target.closest(".pr-hl-card") !== null) return;
+          var selection = window.getSelection();
+          if (selection !== null && String(selection).trim() !== "") return;
+          var page = target !== null && target !== undefined && typeof target.closest === "function" ? target.closest(".pr-page") : null;
+          if (page === null) { setHlCard(null); return; }
+          // Hit-test the highlight rects themselves: the highlight layer ignores
+          // pointer events so text stays selectable, which also keeps it out of
+          // elementsFromPoint.
+          var rects = page.querySelectorAll(".pr-hl");
+          var hit = null;
+          for (var i = 0; i < rects.length; i += 1) {
+            var box = rects[i].getBoundingClientRect();
+            if (box.width === 0 || box.height === 0) continue;
+            if (event.clientX >= box.left && event.clientX <= box.right && event.clientY >= box.top && event.clientY <= box.bottom) {
+              hit = rects[i];
+              break;
+            }
+          }
+          if (hit === null) { setHlCard(null); return; }
+          var id = hit.getAttribute("data-pr-annotation");
+          var list = annotationsRef.current === undefined || annotationsRef.current === null ? [] : annotationsRef.current;
+          for (var j = 0; j < list.length; j += 1) {
+            if (list[j].id === id) { setHlCard({ annotation: list[j], x: event.clientX, y: event.clientY }); return; }
+          }
+          setHlCard(null);
+        }
+        function onKey(event) {
+          if (event.key === "Escape") setHlCard(null);
+        }
+        document.addEventListener("click", onDocClick, true);
+        document.addEventListener("keydown", onKey, true);
+        return function () {
+          document.removeEventListener("click", onDocClick, true);
+          document.removeEventListener("keydown", onKey, true);
+        };
+      }, []);
+
+      function renderHlCard() {
+        if (hlCard === null) return null;
+        var annotation = hlCard.annotation;
+        var noteText = typeof annotation.note === "string" ? annotation.note : "";
+        var quote = annotation.text !== "" ? annotation.text : noteText;
+        var width = 300;
+        // Anchor inside the reader root: the card lives in the same stacking and
+        // coordinate space as the pages, so no viewport math is involved.
+        var host = rootRef.current;
+        var hostRect = host === null ? { left: 0, top: 0, width: window.innerWidth || 1200, height: window.innerHeight || 800 } : host.getBoundingClientRect();
+        var left = Math.min(Math.max(hlCard.x - hostRect.left - 24, 8), Math.max(8, hostRect.width - width - 8));
+        var top = Math.min(Math.max(hlCard.y - hostRect.top + 16, 8), Math.max(8, hostRect.height - 190));
+        return h(
+          "div",
+          { className: "pr-hl-card", style: { width: width + "px", left: left + "px", top: top + "px" } },
+          h(
+            "div",
+            { className: "pr-hl-card-head" },
+            h("span", { className: "pr-hl-card-page" }, t("page").replace("{n}", String(annotation.page))),
+            annotation.author === "ai" ? h("span", { className: "pr-author pr-author-ai" }, t("aiAuthor")) : null,
+            h(
+              "button",
+              { type: "button", className: "pr-icon-btn pr-icon-btn-sm", title: t("close"), onClick: function () { setHlCard(null); } },
+              h(Icon, { name: "close", size: 12 })
+            )
+          ),
+          quote !== "" ? h("div", { className: "pr-hl-card-quote" }, quote) : null,
+          noteText !== "" && annotation.text !== ""
+            ? h("div", { className: "pr-hl-card-note" }, noteText)
+            : (noteText === "" ? h("div", { className: "pr-hl-card-empty" }, t("hlCardEmpty")) : null),
+          h(
+            "div",
+            { className: "pr-hl-card-actions" },
+            h(
+              "button",
+              { type: "button", className: "pr-hl-card-btn", onClick: function () { setHlCard(null); editNote(annotation); } },
+              h(Icon, { name: "pencil", size: 12 }),
+              h("span", null, t("editNoteTitle"))
+            ),
+            h(
+              "button",
+              { type: "button", className: "pr-hl-card-btn pr-hl-card-btn-danger", onClick: function () { setHlCard(null); removeAnnotation(annotation.id); } },
+              h(Icon, { name: "trash", size: 12 }),
+              h("span", null, t("delete"))
+            )
+          )
+        );
+      }
+
+      revealRef.current = revealAnnotation;
+
       var emptyState = error === null && pdf === null && busy === "" && libraryOpen === false
         ? renderEmpty()
         : null;
@@ -2892,6 +3155,7 @@ window.__ModuleLoader__.load({
         "div",
         {
           className: "pr-root",
+          ref: rootRef,
           onDragOver: function (event) { event.preventDefault(); setDragOver(true); },
           onDragLeave: function (event) {
             if (event.currentTarget === event.target) setDragOver(false);
@@ -2912,6 +3176,7 @@ window.__ModuleLoader__.load({
         renderMoreMenu(),
         renderSelectionPopup(),
         renderNoteEditor(),
+        renderHlCard(),
         dragOver ? h("div", { className: "pr-drop" }, h(Icon, { name: "upload", size: 26 }), h("div", null, t("dropHere"))) : null,
         toast !== null ? h("div", { className: "pr-toast" }, toast) : null,
         h("input", {
@@ -3327,6 +3592,17 @@ window.__ModuleLoader__.load({
       ".pr-menu-item{display:flex;align-items:center;gap:7px;padding:7px 9px;border:0;border-radius:6px;background:none;color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;cursor:pointer;text-decoration:none;text-align:left}",
       ".pr-menu-item:hover{background:var(--dsw-alias-bg-layer-2)}",
       ".pr-menu-item-danger{color:var(--dsw-alias-state-error-primary)}",
+      ".pr-hl-card{position:absolute;z-index:100002;background:var(--dsw-alias-bg-overlay,#1f1f1f);border:1px solid var(--dsw-alias-border-l1);border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,.4);padding:9px 10px;display:flex;flex-direction:column;gap:6px}",
+      ".pr-hl-card-head{display:flex;align-items:center;gap:6px}",
+      ".pr-hl-card-page{font-size:10.5px;color:var(--dsw-alias-label-secondary)}",
+      ".pr-hl-card-head .pr-icon-btn{margin-left:auto}",
+      ".pr-hl-card-quote{font-size:11px;line-height:1.5;color:var(--dsw-alias-label-secondary);border-left:2px solid var(--dsw-alias-border-l1);padding-left:7px;max-height:74px;overflow:hidden}",
+      ".pr-hl-card-note{font-size:12px;line-height:1.55;color:var(--dsw-alias-label-primary);white-space:pre-wrap;word-break:break-word;max-height:150px;overflow:auto}",
+      ".pr-hl-card-empty{font-size:11px;color:var(--dsw-alias-label-secondary)}",
+      ".pr-hl-card-actions{display:flex;gap:6px;justify-content:flex-end}",
+      ".pr-hl-card-btn{display:inline-flex;align-items:center;gap:4px;height:22px;padding:0 8px;border-radius:6px;border:1px solid var(--dsw-alias-border-l1);background:none;color:var(--dsw-alias-label-primary);font:inherit;font-size:11px;cursor:pointer}",
+      ".pr-hl-card-btn:hover{background:var(--dsw-alias-bg-layer-2)}",
+      ".pr-hl-card-btn-danger{color:var(--dsw-alias-state-error-primary,#e5484d)}",
       ".pr-toast{position:absolute;left:50%;bottom:16px;transform:translateX(-50%);max-width:calc(100% - 24px);background:var(--dsw-alias-bg-overlay);border:1px solid var(--dsw-alias-border-l1);color:var(--dsw-alias-label-primary);font-size:11.5px;line-height:1.5;padding:7px 12px;border-radius:8px;box-shadow:0 8px 26px rgba(0,0,0,.35);z-index:7;text-align:center;pointer-events:none}",
       ".pr-drop{position:absolute;inset:8px;z-index:50;border:2px dashed var(--dsw-alias-brand-primary);border-radius:12px;background:var(--dsw-alias-bg-overlay);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;color:var(--dsw-alias-label-primary);font-size:13px;pointer-events:none;opacity:.96}",
       ".pr-file-input{display:none}",
@@ -3340,6 +3616,8 @@ window.__ModuleLoader__.load({
       ".pr-note-new{align-self:flex-start}",
       ".pr-note-row-mark{flex:none;width:18px;text-align:center;font-size:10px;color:var(--dsw-alias-label-secondary)}",
       ".pr-note-row-open{background:none;border:0;font:inherit;text-align:left;cursor:pointer;padding:0}",
+      ".pr-note-row-text.pr-note-row-open{white-space:normal;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:5;overflow:hidden;text-overflow:clip;word-break:break-word;line-height:1.5}",
+      ".pr-note-row-open:focus-visible{outline:1px solid var(--dsw-alias-brand-primary,#c96442);outline-offset:2px;border-radius:4px}",
       ".pr-page-chip-btn{border:1px solid transparent;background:none;font:inherit;cursor:pointer;padding:1px 4px;border-radius:5px}",
       ".pr-page-chip-btn:hover{border-color:var(--dsw-alias-border-l1);color:var(--dsw-alias-label-primary)}",
       ".pr-note-row-actions .pr-icon-btn{width:20px;height:20px;display:inline-flex;align-items:center;justify-content:center}",
@@ -3347,7 +3625,9 @@ window.__ModuleLoader__.load({
       ".pr-menu-note{padding:4px 10px 6px;font-size:10.5px;color:var(--dsw-alias-label-secondary)}",
       ".pr-hl-badge{position:absolute;right:-10px;top:6px;z-index:3;min-width:20px;height:18px;padding:0 5px;display:inline-flex;align-items:center;justify-content:center;border-radius:9px;background:var(--dsw-alias-brand-primary,#c96442);color:#fff;font-size:10px;line-height:1;box-shadow:0 1px 4px rgba(0,0,0,.25);cursor:default}",
       ".pr-hl-badge-ai{background:var(--dsw-alias-brand-primary,#c96442)}",
-      ".pr-note-row{display:flex;align-items:center;gap:6px;padding:5px 6px;border-radius:7px;cursor:pointer;min-width:0}",
+      ".pr-note-row{display:flex;align-items:flex-start;gap:6px;padding:5px 6px;border-radius:7px;cursor:pointer;min-width:0}",
+      ".pr-note-row-main{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;gap:2px}",
+      ".pr-note-row-main .pr-note-row-text{flex:none}",
       ".pr-note-row:hover{background:var(--dsw-alias-bg-layer-2)}",
       ".pr-note-row-text{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11.5px;color:var(--dsw-alias-label-primary)}",
       ".pr-note-row-actions{display:flex;align-items:center;gap:1px;flex:none;opacity:.35;transition:opacity .12s}",
@@ -3359,6 +3639,10 @@ window.__ModuleLoader__.load({
       ".pr-kind{flex:none;white-space:nowrap;display:inline-flex;align-items:center;gap:3px;font-size:10.5px;color:var(--dsw-alias-label-secondary)}",
       ".pr-kind-note{color:var(--dsw-alias-state-success-primary)}",
       ".pr-note-row-body{margin-top:5px;font-size:11.5px;line-height:1.55;color:var(--dsw-alias-label-primary);white-space:pre-wrap;word-break:break-word}",
+      ".pr-note-block{display:flex;flex-direction:column;gap:2px;min-width:0}",
+      ".pr-note-block-title{font-size:11.5px;font-weight:600;color:var(--dsw-alias-label-primary)}",
+      ".pr-note-block-body{font-size:11px;line-height:1.5;color:var(--dsw-alias-label-secondary);display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;white-space:pre-wrap}",
+      ".pr-note-row-note{margin-top:0;color:var(--dsw-alias-label-secondary);font-size:11px;line-height:1.45}",
       ".pr-note-row-quote{margin-top:4px;font-size:10.5px;line-height:1.5;color:var(--dsw-alias-label-secondary);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;word-break:break-word}",
       ".pr-panel-tabs{display:flex;align-items:center;gap:4px;flex:1 1 auto;min-width:0}",
       ".pr-panel-tab{display:inline-flex;align-items:center;gap:4px;border:0;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:12.5px;padding:4px 8px;border-radius:7px;cursor:pointer}",
