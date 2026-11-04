@@ -834,6 +834,13 @@ window.__ModuleLoader__.load({
       var derivedPair = useState({});
       var derivedRects = derivedPair[0];
       var setDerivedRects = derivedPair[1];
+      var attachRef = useRef(null);
+      if (attachRef.current === null) {
+        attachRef.current = function (element) {
+          holderRef.current = element;
+          if (props.onElement !== undefined) props.onElement(pageNumber, element);
+        };
+      }
       var tickPair = useState(0);
       var readyTick = tickPair[0];
       var setReadyTick = tickPair[1];
@@ -907,10 +914,7 @@ window.__ModuleLoader__.load({
       return h(
         "div",
         {
-          ref: function (element) {
-            holderRef.current = element;
-            if (props.onElement !== undefined) props.onElement(pageNumber, element);
-          },
+          ref: attachRef.current,
           className: "pr-page",
           "data-pr-page": String(pageNumber),
           style: { width: Math.floor(width) + "px", height: Math.floor(height) + "px" }
@@ -1311,8 +1315,7 @@ window.__ModuleLoader__.load({
             id: newNoteId(),
             text: text,
             author: "human",
-            sourceSessionId: scope.sessionId === undefined ? "" : scope.sessionId,
-            sourceSessionTitle: "",
+
             createdAt: now,
             updatedAt: now
           });
@@ -1355,48 +1358,6 @@ window.__ModuleLoader__.load({
         }).catch(function (errorValue) {
           showToast(t("saveFailed") + (errorValue && errorValue.message ? ": " + errorValue.message : ""));
         });
-      }
-
-      function jumpToSession(annotation) {
-        var sessionId = annotation === undefined || annotation === null ? "" : annotation.sourceSessionId;
-        if (typeof sessionId !== "string" || sessionId === "") {
-          showToast(t("noSession"));
-          return;
-        }
-        try {
-          var workspace = ctx.get("uiWorkspace");
-          if (workspace !== undefined && workspace !== null && typeof workspace.openSession === "function") {
-            var opened = workspace.openSession(sessionId);
-            if (opened !== null && opened !== undefined && typeof opened.then === "function") {
-              opened.catch(function () { showToast(t("noSession")); });
-            }
-            return;
-          }
-        } catch (errorValue) {
-          console.warn("[dsh-paper-reader] openSession failed:", errorValue);
-        }
-        showToast(t("noSession"));
-      }
-
-      function copyLocationLink(annotation) {
-        var link = "paper://" + String(docId) + "@p" + String(annotation.page);
-        try {
-          navigator.clipboard.writeText(link).then(function () { showToast(t("linkCopied") + " " + link); });
-        } catch (errorValue) {
-          console.warn("[dsh-paper-reader] clipboard failed:", errorValue);
-        }
-      }
-
-      function askAboutFile(entry) {
-        if (tree === null) return;
-        var absolute = tree.path.replace(/\/+$/, "") + "/" + entry.name;
-        var title = meta === null ? t("untitled") : meta.title;
-        var lead = lang === "zh"
-          ? "请读一下这个文件，并把它与论文《" + title + "》第 " + currentPage + " 页的方法描述对照，指出实现与论文的差异："
-          : "Read this file and compare it with the method described on page " + currentPage + " of \"" + title + "\":";
-        var prompt = lead + "\n\n" + absolute;
-        var ok = appendToComposer(ctx, scope.sessionId, prompt);
-        showToast(ok ? t("askQueued") : t("askFailed"));
       }
 
       function updateRenderRange(scrollTop, viewportHeight) {
@@ -1539,7 +1500,22 @@ window.__ModuleLoader__.load({
             var list = Array.isArray(doc.annotations) ? doc.annotations : [];
             var fresh = list.filter(function (annotation) { return !seen.has(annotation.id); });
             list.forEach(function (annotation) { seen.add(annotation.id); });
-            setAnnotations(list);
+            setAnnotations(function (previous) {
+              if (previous.length === list.length) {
+                var same = true;
+                for (var i = 0; i < list.length; i += 1) {
+                  if (previous[i].id !== list[i].id
+                    || previous[i].note !== list[i].note
+                    || previous[i].text !== list[i].text
+                    || previous[i].updatedAt !== list[i].updatedAt) {
+                    same = false;
+                    break;
+                  }
+                }
+                if (same) return previous;
+              }
+              return list;
+            });
             setMeta(function (previous) {
               if (previous === null) return previous;
               return Object.assign({}, previous, {
@@ -1835,7 +1811,7 @@ window.__ModuleLoader__.load({
             note: "",
             color: HIGHLIGHT_COLOR,
             author: "human",
-            sourceSessionId: scope !== undefined && scope !== null ? String(scope.sessionId) : "",
+
             createdAt: now,
             updatedAt: now
           };
@@ -1901,7 +1877,6 @@ window.__ModuleLoader__.load({
             note: index === 0 ? value : "",
             color: index === 0 ? NOTE_COLOR : HIGHLIGHT_COLOR,
             author: "human",
-            sourceSessionId: scope !== undefined && scope !== null ? String(scope.sessionId) : "",
             createdAt: now,
             updatedAt: now
           };
@@ -2463,20 +2438,6 @@ window.__ModuleLoader__.load({
                   },
                   h(Icon, { name: "link", size: 12 })
                 ),
-                annotation.sourceSessionId !== undefined && annotation.sourceSessionId !== ""
-                  ? h(
-                      "button",
-                      {
-                        type: "button",
-                        className: "pr-icon-btn pr-icon-btn-sm",
-                        title: annotation.sourceSessionTitle !== undefined && annotation.sourceSessionTitle !== ""
-                          ? t("goSession") + ": " + annotation.sourceSessionTitle
-                          : t("goSession"),
-                        onClick: function (event) { event.stopPropagation(); jumpToSession(annotation); }
-                      },
-                      h(Icon, { name: "chat", size: 12 })
-                    )
-                  : null,
                 isNote
                   ? h(
                       "button",

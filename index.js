@@ -325,8 +325,8 @@ function normalizePaperNote(raw) {
     id: typeof raw.id === 'string' && raw.id !== '' ? raw.id.slice(0, 80) : randomUUID(),
     text,
     author: raw.author === 'ai' ? 'ai' : 'human',
-    sourceSessionId: typeof raw.sourceSessionId === 'string' ? raw.sourceSessionId.slice(0, 80) : '',
-    sourceSessionTitle: typeof raw.sourceSessionTitle === 'string' ? raw.sourceSessionTitle.slice(0, 200) : '',
+    sourceSessionId: '',
+    sourceSessionTitle: '',
     createdAt: Number.isFinite(raw.createdAt) ? raw.createdAt : Date.now(),
     updatedAt: Number.isFinite(raw.updatedAt) ? raw.updatedAt : Date.now(),
   }
@@ -554,7 +554,7 @@ function renderNotesMarkdown(meta) {
     lines.push(`## page ${annotation.page} · ${annotation.kind} · ${author}`)
     if (annotation.text !== '') lines.push('', `> ${annotation.text.replace(/\n/g, '\n> ')}`)
     if (annotation.note !== '') lines.push('', annotation.note)
-    if (annotation.sourceSessionId !== '') lines.push('', `session: ${annotation.sourceSessionTitle || ''} (${annotation.sourceSessionId})`.trim())
+
     lines.push('')
   }
   return lines.join('\n')
@@ -1215,7 +1215,6 @@ function toolText(value) {
 
 async function runAnnotationTool(args, exec) {
   const action = typeof args.action === 'string' ? args.action : 'list'
-  const sessionId = String(exec?.agent?.session?.id ?? '')
   if (action === 'list') {
     const id = docId(args.docId)
     if (id === undefined) {
@@ -1244,8 +1243,7 @@ async function runAnnotationTool(args, exec) {
         author: annotation.author,
         text: annotation.text.slice(0, 2000),
         note: annotation.note.slice(0, 4000),
-        sessionId: annotation.sourceSessionId,
-        sessionTitle: annotation.sourceSessionTitle,
+
         createdAt: annotation.createdAt,
       }))
     return {
@@ -1259,7 +1257,6 @@ async function runAnnotationTool(args, exec) {
         id: note.id,
         text: note.text,
         author: note.author,
-        sessionTitle: note.sourceSessionTitle,
         updatedAt: note.updatedAt,
       })),
     }
@@ -1281,8 +1278,6 @@ async function runAnnotationTool(args, exec) {
       note,
       color: '',
       author: 'ai',
-      sourceSessionId: sessionId,
-      sourceSessionTitle: typeof args.sessionTitle === 'string' ? args.sessionTitle : '',
       createdAt: now,
       updatedAt: now,
     })
@@ -1305,8 +1300,6 @@ async function runAnnotationTool(args, exec) {
     const note = normalizePaperNote({
       text,
       author: 'ai',
-      sourceSessionId: sessionId,
-      sourceSessionTitle: typeof args.sessionTitle === 'string' ? args.sessionTitle : '',
       createdAt: now,
       updatedAt: now,
     })
@@ -1402,7 +1395,6 @@ function registerAnnotationTool(ctx) {
           path: { type: 'string', description: 'for action="code": local directory holding the implementation' },
           text: { type: 'string', description: 'the quoted passage the annotation is about' },
           note: { type: 'string', description: 'the annotation body, or the paper-level note text, written in the user\'s language and kept to one sentence' },
-          sessionTitle: { type: 'string', description: 'short label of the current conversation' },
         },
         required: ['action'],
         additionalProperties: false,
@@ -1446,7 +1438,7 @@ const PAPER_SKILL_BODY = `# 论文阅读：标注与笔记作为跨会话记忆
 \`paper_annotations\` 是读写记忆的唯一入口。
 
 - \`list\`：不带 \`docId\` 列论文库（标题、页数、标注/笔记数、解析状态）；带 \`docId\` 读该篇全部 annotations 与 notes。
-- \`create\`：写一条标注，\`docId\` + \`page\` + \`text\`（原文引句）+ \`note\`（判断）+ \`sessionTitle\`。
+- \`create\`：写一条标注，\`docId\` + \`page\` + \`text\`（原文引句）+ \`note\`（判断）。
 - \`update\` / \`delete\`：按 \`id\` 改或删标注。
 - \`note\`：写论文级笔记，\`docId\` + \`note\`；\`update_note\` / \`delete_note\` 按 \`id\`。
 - \`code\`：读或写该论文的代码仓库（\`repo\` 开源地址、\`path\` 本地目录）。
