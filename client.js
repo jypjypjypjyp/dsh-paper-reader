@@ -1637,9 +1637,21 @@ window.__ModuleLoader__.load({
         return offset;
       }
 
+      function logJump(entry) {
+        try {
+          var key = "dsh-paper-reader:jumps";
+          var log = JSON.parse(localStorage.getItem(key) || "[]");
+          log.push(entry);
+          localStorage.setItem(key, JSON.stringify(log.slice(-20)));
+        } catch (error) { /* private mode */ }
+      }
+
       function scrollToPage(page, ratio) {
         var viewport = viewportRef.current;
-        if (viewport === null || pageSizes === null) return;
+        if (viewport === null || pageSizes === null) {
+          logJump({ at: Date.now(), page: page, skip: viewport === null ? "no-viewport" : "no-sizes" });
+          return;
+        }
         var target = Math.min(Math.max(page, 1), pageSizes.length);
         var metrics = pageMetrics(target);
         var share = Number.isFinite(ratio) ? Math.min(Math.max(ratio, 0), 1) : 0;
@@ -1649,8 +1661,20 @@ window.__ModuleLoader__.load({
           if (target >= previous[0] && target <= previous[1]) return previous;
           return [Math.max(1, target - 1), Math.min(pageSizes.length, target + 1)];
         });
+        var before = viewport.scrollTop;
         viewport.scrollTop = Math.max(0, pageOffset(target) + share * (metrics === null ? 0 : metrics.height) - 8);
         setCurrentPage(target);
+        logJump({
+          at: Date.now(),
+          page: target,
+          el: pageEls.current[target] !== undefined,
+          offset: Math.round(pageOffset(target)),
+          before: Math.round(before),
+          after: Math.round(viewport.scrollTop),
+          clientHeight: viewport.clientHeight,
+          scrollHeight: viewport.scrollHeight,
+          width: Math.round(availableWidth)
+        });
       }
 
       function schedulePosition(page, ratio) {
@@ -2001,7 +2025,8 @@ window.__ModuleLoader__.load({
 
       function revealAnnotation(annotation) {
         // Jump without closing the panel: the row stays visible while the page moves.
-        if (pageSizes !== null) scrollToPage(Math.min(Math.max(annotation.page, 1), pageSizes.length), 0);
+        if (pageSizes === null) logJump({ at: Date.now(), page: annotation.page, skip: "reveal-no-sizes" });
+        else scrollToPage(Math.min(Math.max(annotation.page, 1), pageSizes.length), 0);
         setFlashId(annotation.id);
         setTimeout(function () { setFlashId(function (current) { return current === annotation.id ? null : current; }); }, 1800);
       }
