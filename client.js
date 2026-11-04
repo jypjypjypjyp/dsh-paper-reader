@@ -212,6 +212,7 @@ window.__ModuleLoader__.load({
         codeTab: "代码",
         notesTab: "标注",
         paperNotesTab: "笔记",
+        jumpToPage: "跳到这一页",
         newPaperNote: "新建笔记",
         paperNotePlaceholder: "一句话结论，不超过 40 字",
         noPaperNotes: "还没有笔记。读到结论时记一句，下次会话直接可读。",
@@ -322,6 +323,7 @@ window.__ModuleLoader__.load({
         codeTab: "Code",
         notesTab: "Annotations",
         paperNotesTab: "Notes",
+        jumpToPage: "Jump to this page",
         newPaperNote: "New note",
         paperNotePlaceholder: "One-sentence takeaway, 40 characters or fewer",
         noPaperNotes: "No notes yet. Jot one line when a conclusion lands; the next session reads it.",
@@ -1364,7 +1366,10 @@ window.__ModuleLoader__.load({
         try {
           var workspace = ctx.get("uiWorkspace");
           if (workspace !== undefined && workspace !== null && typeof workspace.openSession === "function") {
-            workspace.openSession(sessionId);
+            var opened = workspace.openSession(sessionId);
+            if (opened !== null && opened !== undefined && typeof opened.then === "function") {
+              opened.catch(function () { showToast(t("noSession")); });
+            }
             return;
           }
         } catch (errorValue) {
@@ -1376,7 +1381,7 @@ window.__ModuleLoader__.load({
       function copyLocationLink(annotation) {
         var link = "paper://" + String(docId) + "@p" + String(annotation.page);
         try {
-          navigator.clipboard.writeText(link).then(function () { showToast(t("linkCopied")); });
+          navigator.clipboard.writeText(link).then(function () { showToast(t("linkCopied") + " " + link); });
         } catch (errorValue) {
           console.warn("[dsh-paper-reader] clipboard failed:", errorValue);
         }
@@ -2428,7 +2433,16 @@ window.__ModuleLoader__.load({
                 title: tooltip,
                 onClick: function () { revealAnnotation(annotation); }
               },
-              h("span", { className: "pr-page-chip" }, t("page").replace("{n}", String(annotation.page))),
+              h(
+                "button",
+                {
+                  type: "button",
+                  className: "pr-page-chip pr-page-chip-btn",
+                  title: t("jumpToPage"),
+                  onClick: function (event) { event.stopPropagation(); revealAnnotation(annotation); }
+                },
+                t("page").replace("{n}", String(annotation.page))
+              ),
               h(
                 "span",
                 { className: "pr-kind" + (isNote ? " pr-kind-note" : "") },
@@ -3303,6 +3317,9 @@ window.__ModuleLoader__.load({
       ".pr-note-new{align-self:flex-start}",
       ".pr-note-row-mark{flex:none;width:18px;text-align:center;font-size:10px;color:var(--dsw-alias-label-secondary)}",
       ".pr-note-row-open{background:none;border:0;font:inherit;text-align:left;cursor:pointer;padding:0}",
+      ".pr-page-chip-btn{border:1px solid transparent;background:none;font:inherit;cursor:pointer;padding:1px 4px;border-radius:5px}",
+      ".pr-page-chip-btn:hover{border-color:var(--dsw-alias-border-l1);color:var(--dsw-alias-label-primary)}",
+      ".pr-note-row-actions .pr-icon-btn{width:20px;height:20px;display:inline-flex;align-items:center;justify-content:center}",
       ".pr-hl-badge{position:absolute;right:-10px;top:6px;z-index:3;min-width:20px;height:18px;padding:0 5px;display:inline-flex;align-items:center;justify-content:center;border-radius:9px;background:var(--dsw-alias-brand-primary,#c96442);color:#fff;font-size:10px;line-height:1;box-shadow:0 1px 4px rgba(0,0,0,.25);cursor:default}",
       ".pr-hl-badge-ai{background:var(--dsw-alias-brand-primary,#c96442)}",
       ".pr-note-row{display:flex;align-items:center;gap:6px;padding:5px 6px;border-radius:7px;cursor:pointer;min-width:0}",
