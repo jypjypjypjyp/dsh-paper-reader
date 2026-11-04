@@ -87,6 +87,10 @@ window.__ModuleLoader__.load({
         ["path", { d: "M7.2 4.6 8.5 3.3a2.4 2.4 0 0 1 3.4 3.4l-1.3 1.3" }],
         ["path", { d: "M8.8 11.4 7.5 12.7a2.4 2.4 0 0 1-3.4-3.4l1.3-1.3" }]
       ],
+      locate: [
+        ["circle", { cx: 8, cy: 8, r: 3.2 }],
+        ["path", { d: "M8 1.4v3.2M8 11.4v3.2M1.4 8h3.2M11.4 8h3.2" }]
+      ],
       arrowUp: [
         ["path", { d: "M8 12.6V3.4M4.6 6.8 8 3.4l3.4 3.4" }]
       ],
@@ -2416,7 +2420,7 @@ window.__ModuleLoader__.load({
                   title: t("jumpToPage"),
                   onClick: function (event) { event.stopPropagation(); revealAnnotation(annotation); }
                 },
-                t("page").replace("{n}", String(annotation.page))
+                t("page").replace("{n}", String(annotation.page)) + " ↗"
               ),
               h(
                 "span",
@@ -2428,6 +2432,16 @@ window.__ModuleLoader__.load({
               h(
                 "span",
                 { className: "pr-note-row-actions" },
+                h(
+                  "button",
+                  {
+                    type: "button",
+                    className: "pr-icon-btn pr-icon-btn-sm pr-icon-btn-jump",
+                    title: t("jumpToPage"),
+                    onClick: function (event) { event.stopPropagation(); revealAnnotation(annotation); }
+                  },
+                  h(Icon, { name: "locate", size: 12 })
+                ),
                 h(
                   "button",
                   {
@@ -3281,6 +3295,7 @@ window.__ModuleLoader__.load({
       ".pr-page-chip-btn{border:1px solid transparent;background:none;font:inherit;cursor:pointer;padding:1px 4px;border-radius:5px}",
       ".pr-page-chip-btn:hover{border-color:var(--dsw-alias-border-l1);color:var(--dsw-alias-label-primary)}",
       ".pr-note-row-actions .pr-icon-btn{width:20px;height:20px;display:inline-flex;align-items:center;justify-content:center}",
+      ".pr-icon-btn-jump{color:var(--dsw-alias-brand-primary,#c96442)}",
       ".pr-hl-badge{position:absolute;right:-10px;top:6px;z-index:3;min-width:20px;height:18px;padding:0 5px;display:inline-flex;align-items:center;justify-content:center;border-radius:9px;background:var(--dsw-alias-brand-primary,#c96442);color:#fff;font-size:10px;line-height:1;box-shadow:0 1px 4px rgba(0,0,0,.25);cursor:default}",
       ".pr-hl-badge-ai{background:var(--dsw-alias-brand-primary,#c96442)}",
       ".pr-note-row{display:flex;align-items:center;gap:6px;padding:5px 6px;border-radius:7px;cursor:pointer;min-width:0}",

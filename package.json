@@ -1,6 +1,6 @@
 {
   "name": "dsh-paper-reader",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "description": "Paper reader tab for the DSH right sidebar: renders PDFs with their original layout and fonts, and offers highlight, note and ask-in-conversation on any selection.",
   "type": "module",
   "main": "index.js",
