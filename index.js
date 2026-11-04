@@ -1040,6 +1040,16 @@ async function handleApi(req, res, url, fence) {
     return true
   }
 
+  if (pathname === '/paper-reader/api/version') {
+    if (req.method !== 'GET') {
+      sendError(res, 405, 'method not allowed', 'method-error')
+      return true
+    }
+    const pkg = JSON.parse(await readFile(new URL('./package.json', import.meta.url), 'utf8').catch(() => '{}'))
+    sendJson(res, 200, { ok: true, version: typeof pkg.version === 'string' ? pkg.version : '' })
+    return true
+  }
+
   if (pathname === '/paper-reader/api/skill') {
     if (req.method !== 'GET') {
       sendError(res, 405, 'method not allowed', 'method-error')

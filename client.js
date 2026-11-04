@@ -1082,6 +1082,10 @@ window.__ModuleLoader__.load({
       var panelTabPair = useState("annotations");
       var panelTab = panelTabPair[0];
       var setPanelTab = panelTabPair[1];
+      var versionPair = useState("");
+      var pluginVersion = versionPair[0];
+      var setPluginVersion = versionPair[1];
+
       var noteDraftPair = useState(null);
       var noteDraft = noteDraftPair[0];
       var setNoteDraft = noteDraftPair[1];
@@ -2726,6 +2730,14 @@ window.__ModuleLoader__.load({
             mineruParsed ? t("parseMineruDone") : mineruBusy ? t("parseRunning") : t("parseRun")
           ));
           items.push(h(
+            "span",
+            {
+              key: "version",
+              className: "pr-menu-note"
+            },
+            "dsh-paper-reader " + (pluginVersion === "" ? "" : "v" + pluginVersion)
+          ));
+          items.push(h(
             "a",
             {
               key: "download",
@@ -3321,6 +3333,7 @@ window.__ModuleLoader__.load({
       ".pr-page-chip-btn:hover{border-color:var(--dsw-alias-border-l1);color:var(--dsw-alias-label-primary)}",
       ".pr-note-row-actions .pr-icon-btn{width:20px;height:20px;display:inline-flex;align-items:center;justify-content:center}",
       ".pr-icon-btn-jump{color:var(--dsw-alias-brand-primary,#c96442)}",
+      ".pr-menu-note{padding:4px 10px 6px;font-size:10.5px;color:var(--dsw-alias-label-secondary)}",
       ".pr-hl-badge{position:absolute;right:-10px;top:6px;z-index:3;min-width:20px;height:18px;padding:0 5px;display:inline-flex;align-items:center;justify-content:center;border-radius:9px;background:var(--dsw-alias-brand-primary,#c96442);color:#fff;font-size:10px;line-height:1;box-shadow:0 1px 4px rgba(0,0,0,.25);cursor:default}",
       ".pr-hl-badge-ai{background:var(--dsw-alias-brand-primary,#c96442)}",
       ".pr-note-row{display:flex;align-items:center;gap:6px;padding:5px 6px;border-radius:7px;cursor:pointer;min-width:0}",
