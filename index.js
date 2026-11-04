@@ -17,7 +17,7 @@ import { createReadStream } from 'node:fs'
 import { cp, mkdir, readFile, readdir, rename, rm, stat, unlink, writeFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
-import { extname, join, resolve, sep } from 'node:path'
+import { dirname, extname, join, resolve, sep } from 'node:path'
 import { inflateRawSync } from 'node:zlib'
 import { fileURLToPath } from 'node:url'
 
@@ -492,11 +492,17 @@ async function paperBrief(id) {
   }
 }
 
-/** Whether this paper's markdown already exists, without materializing anything. */
-async function markdownExists(meta) {
-  if (meta.workDir === '') return false
+/**
+ * What the paper's markdown folder actually holds: whether a markdown file
+ * exists, and whether it came with extracted figures (which only MinerU
+ * produces, markitdown writes plain text).
+ */
+async function markdownState(meta) {
+  if (meta.workDir === '') return { exists: false, hasImages: false }
   const found = await findMarkdown(join(meta.workDir, 'markdown'))
-  return found !== ''
+  if (found === '') return { exists: false, hasImages: false }
+  const images = await readdir(join(dirname(found), 'images')).catch(() => [])
+  return { exists: true, hasImages: images.length > 0 }
 }
 
 async function findMarkdown(dir) {
@@ -960,7 +966,8 @@ async function handleApi(req, res, url, fence) {
     if (req.method === 'GET') {
       try {
         const meta = await readMeta(id)
-        sendJson(res, 200, { ok: true, doc: { ...meta, hasMarkdown: await markdownExists(meta) } })
+        const markdown = await markdownState(meta)
+        sendJson(res, 200, { ok: true, doc: { ...meta, hasMarkdown: markdown.exists, markdownHasImages: markdown.hasImages } })
       } catch {
         sendError(res, 404, 'paper not found', 'not-found')
       }
