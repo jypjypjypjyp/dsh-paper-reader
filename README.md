@@ -51,7 +51,9 @@ dsh plugin --profile web add link:./projects/dsh-paper-reader
 
 ## 跨会话记忆 skill
 
-插件在 `apply()` 里用 `ctx.inject(['skills'])` + `ctx.skills.register()` 注册了一个运行时 skill `paper-memory`，内容是「怎么用标注和笔记做跨会话记忆、每条写多短」。它出现在 agent 的 skill 目录里，模型可以自行调用；点阅读器的 `@` 时，插件会把论文目录信息和这个 skill 的正文一起写进输入框，让模型当场按规则读旧记忆、写新记忆。
+插件在 `apply()` 里用 `ctx.inject(['skills'])` + `ctx.skills.register()` 注册了一个运行时 skill `dsh-paper-reading`：工具清单（`paper_annotations` 的每个 action）、论文目录里有什么、什么时候该写、每条写多短、什么不该写。
+
+它出现在 agent 的 skill 目录里，模型可以自行调用；点阅读器的 `@` 时，输入框里写的是 `/dsh-paper-reading` 这个手势加论文目录信息，由 DSH 的 skill 机制按需加载正文（`dsh-tool-skill` 用 `/(^|\s)\/([a-z0-9-]+)(?=\s|$)/` 扫描用户消息），而不是把正文粘进对话。
 
 规则很短：标注挂原文、笔记记判断，每条一句话不超过 40 字，只写结论与依据，不写推测与过程。
 

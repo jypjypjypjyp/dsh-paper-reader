@@ -1130,16 +1130,12 @@ window.__ModuleLoader__.load({
           if (folder.code.repo !== "") lines.push((lang === "zh" ? "- 代码仓库：" : "- code repository: ") + folder.code.repo);
           else if (folder.code.path !== "") lines.push((lang === "zh" ? "- 本地代码：" : "- local code: ") + folder.code.path);
           else lines.push(lang === "zh" ? "- 代码：论文未提供开源实现，可在 code/ 下按论文自行实现" : "- code: no official implementation; implement it under code/");
-          lines.push("");
-          if (skill !== null && skill !== undefined && typeof skill.content === "string" && skill.content !== "") {
-            lines.push(lang === "zh" ? "按这个 skill 的规则，用标注与笔记做跨会话记忆：" : "Follow this skill so highlights and notes carry across sessions:");
-            lines.push("");
-            lines.push(skill.content.trim());
-          } else {
-            lines.push(lang === "zh"
-              ? "用 paper_annotations 读写标注与笔记做跨会话记忆：每条一句话，不超过 40 字，只写结论与依据。"
-              : "Use paper_annotations for cross-session memory: one sentence per highlight or note, 40 characters max, conclusions only.");
-          }
+          // The host turns a bare /skill-name gesture into a skill load, so the
+          // draft points at the skill instead of pasting its text.
+          var gesture = skill !== null && skill !== undefined && typeof skill.name === "string" && skill.name !== ""
+            ? "/" + skill.name
+            : "/dsh-paper-reading";
+          lines.unshift(gesture, "");
           var ok = appendToComposer(ctx, scope.sessionId, lines.join("\n"));
           showToast(ok ? t("askQueued") : t("askFailed"));
         }).catch(function (errorValue) {

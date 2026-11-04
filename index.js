@@ -1422,20 +1422,43 @@ function registerAnnotationTool(ctx) {
 
 // ── the skill that teaches cross-session paper memory ────────────────────────
 
-const PAPER_SKILL_NAME = 'paper-memory'
+const PAPER_SKILL_NAME = 'dsh-paper-reading'
 
-const PAPER_SKILL_DESCRIPTION = '用论文的高亮与笔记做跨会话记忆：怎么读、怎么写、写多短。'
+const PAPER_SKILL_DESCRIPTION = '读论文时用标注与笔记做跨会话记忆：paper_annotations 怎么调、什么时候写、写多短。'
 
-const PAPER_SKILL_BODY = `# 论文记忆
+const PAPER_SKILL_BODY = `# 论文阅读：标注与笔记作为跨会话记忆
 
-标注（annotation）挂在某一页的一段原文上；笔记（note）是论文级的判断。两者都会跨会话保留。
+每篇论文的工作目录里有：\`pdf/<名>.pdf\` 原文、\`markdown/paper.md\`（解析正文，可能带 \`markdown/images/\`）、\`code/\` 本地实现。解析产物可能为空，原文永远在。
 
-- 读：\`paper_annotations\` 不带 docId 列论文；带 docId 读该篇的 annotations 与 notes。接手新会话先读这两样，不要重读全文。
-- 写标注：\`action=create\`，\`page\` + \`text\`（原文引句）+ \`note\`（判断）。
-- 写笔记：\`action=note\`，\`note\` 一句话。
-- 长度：每条不超过 40 字，只写结论与依据；不复述原文，不写过程。
-- 时机：得出能改变判断的结论，或用户明确要求记下来时写。
-- 不写：推测、待验证的想法、与论文无关的闲聊。
+## 工具
+
+\`paper_annotations\` 是读写记忆的唯一入口。
+
+- \`list\`：不带 \`docId\` 列论文库（标题、页数、标注/笔记数、解析状态）；带 \`docId\` 读该篇全部 annotations 与 notes。
+- \`create\`：写一条标注，\`docId\` + \`page\` + \`text\`（原文引句）+ \`note\`（判断）+ \`sessionTitle\`。
+- \`update\` / \`delete\`：按 \`id\` 改或删标注。
+- \`note\`：写论文级笔记，\`docId\` + \`note\`；\`update_note\` / \`delete_note\` 按 \`id\`。
+- \`code\`：读或写该论文的代码仓库（\`repo\` 开源地址、\`path\` 本地目录）。
+
+## 怎么用
+
+1. 接手新会话：先 \`list\` 看库里有什么；带 \`docId\` 读该篇的标注与笔记，据此决定要不要读全文，别从零重读。
+2. 需要原文细节：读 \`markdown/paper.md\`，按小节取用。
+3. 得出能改变判断的结论：挂原文用 \`create\`，论文级判断用 \`note\`。
+4. 用户说「记一下」：当场写，不要拖到会话结束。
+
+## 写作规则
+
+- 一句话，不超过 40 字，只写结论与依据。
+- 标注的 \`text\` 是原文引句（不超过 200 字），\`note\` 是你的判断。
+- 笔记不复述论文，写「这篇证明了什么」「我该怎么用」。
+- 不写推测、待验证的想法、推导过程、与论文无关的闲聊。
+
+## 不该做的
+
+- 不要为留痕而写：每段都标注等于没有标注。
+- 不要把整段原文抄进 note。
+- 不要用 \`code\` 存仓库以外的内容。
 `
 
 /** Advertise the cross-session memory skill from this plugin's own runtime. */
@@ -1444,7 +1467,7 @@ function registerPaperSkill(ctx) {
     skillCtx.effect(() => skillCtx.skills.register({
       name: PAPER_SKILL_NAME,
       description: PAPER_SKILL_DESCRIPTION,
-      whenToUse: '读论文、写论文笔记、跨会话接着上次的结论继续时',
+      whenToUse: '读论文、写论文标注或笔记、跨会话接着上次的结论继续时',
       content: PAPER_SKILL_BODY,
     }))
   })
