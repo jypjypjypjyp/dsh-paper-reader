@@ -211,6 +211,10 @@ window.__ModuleLoader__.load({
         settingsFailed: "打不开设置页",
         codeTab: "代码",
         notesTab: "标注",
+        paperNotesTab: "笔记",
+        newPaperNote: "新建笔记",
+        paperNotePlaceholder: "一句话结论，不超过 40 字",
+        noPaperNotes: "还没有笔记。读到结论时记一句，下次会话直接可读。",
         codeSection: "关联代码",
         codeRepo: "开源仓库地址",
         codePath: "本地代码目录",
@@ -317,6 +321,10 @@ window.__ModuleLoader__.load({
         settingsFailed: "Could not open the settings page",
         codeTab: "Code",
         notesTab: "Annotations",
+        paperNotesTab: "Notes",
+        newPaperNote: "New note",
+        paperNotePlaceholder: "One-sentence takeaway, 40 characters or fewer",
+        noPaperNotes: "No notes yet. Jot one line when a conclusion lands; the next session reads it.",
         codeSection: "Linked code",
         codeRepo: "Open-source repository",
         codePath: "Local code directory",
@@ -501,6 +509,10 @@ window.__ModuleLoader__.load({
 
     function readParse(id) {
       return getJson(API_BASE + "parse?id=" + encodeURIComponent(id)).then(function (body) { return body.parse; });
+    }
+
+    function readSkill() {
+      return getJson(API_BASE + "skill").then(function (body) { return body.skill; });
     }
 
     function readPaperFolder(id) {
@@ -923,9 +935,12 @@ window.__ModuleLoader__.load({
       var parse = parsePair[0];
       var setParse = parsePair[1];
 
-      var panelTabPair = useState("notes");
+      var panelTabPair = useState("annotations");
       var panelTab = panelTabPair[0];
       var setPanelTab = panelTabPair[1];
+      var noteDraftPair = useState(null);
+      var noteDraft = noteDraftPair[0];
+      var setNoteDraft = noteDraftPair[1];
 
       var treePair = useState(null);
       var tree = treePair[0];
@@ -1100,6 +1115,10 @@ window.__ModuleLoader__.load({
         }
         var title = meta === null ? t("untitled") : meta.title;
         readPaperFolder(docId).then(function (folder) {
+          return readSkill().catch(function () { return null; }).then(function (skill) { return { folder: folder, skill: skill }; });
+        }).then(function (value) {
+          var folder = value.folder;
+          var skill = value.skill;
           var lines = lang === "zh"
             ? ["请阅读这篇论文的工作目录：" + folder.path, "", "- 论文：" + title, "- 原文：pdf/" + baseName(folder.pdf)]
             : ["Read the working folder of this paper: " + folder.path, "", "- paper: " + title, "- original: pdf/" + baseName(folder.pdf)];
@@ -1111,11 +1130,71 @@ window.__ModuleLoader__.load({
           if (folder.code.repo !== "") lines.push((lang === "zh" ? "- 代码仓库：" : "- code repository: ") + folder.code.repo);
           else if (folder.code.path !== "") lines.push((lang === "zh" ? "- 本地代码：" : "- local code: ") + folder.code.path);
           else lines.push(lang === "zh" ? "- 代码：论文未提供开源实现，可在 code/ 下按论文自行实现" : "- code: no official implementation; implement it under code/");
+          lines.push("");
+          if (skill !== null && skill !== undefined && typeof skill.content === "string" && skill.content !== "") {
+            lines.push(lang === "zh" ? "按这个 skill 的规则，用标注与笔记做跨会话记忆：" : "Follow this skill so highlights and notes carry across sessions:");
+            lines.push("");
+            lines.push(skill.content.trim());
+          } else {
+            lines.push(lang === "zh"
+              ? "用 paper_annotations 读写标注与笔记做跨会话记忆：每条一句话，不超过 40 字，只写结论与依据。"
+              : "Use paper_annotations for cross-session memory: one sentence per highlight or note, 40 characters max, conclusions only.");
+          }
           var ok = appendToComposer(ctx, scope.sessionId, lines.join("\n"));
           showToast(ok ? t("askQueued") : t("askFailed"));
         }).catch(function (errorValue) {
           showToast(t("pathFailed") + (errorValue && errorValue.message ? ": " + errorValue.message : ""));
         });
+      }
+
+      function newNoteId() {
+        try {
+          if (window.crypto !== undefined && typeof window.crypto.randomUUID === "function") return window.crypto.randomUUID();
+        } catch (error) { /* older browsers */ }
+        return "n" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+      }
+
+      /** Write the paper-level note list and keep the panel in step with the Host. */
+      function applyPaperNotes(notes) {
+        if (docId === null) return;
+        setMeta(function (previous) {
+          return previous === null ? previous : Object.assign({}, previous, { paperNotes: notes });
+        });
+        setNoteDraft(null);
+        patchDoc(docId, { paperNotes: notes }).then(function () {
+          void refreshLibrary();
+        }).catch(function (errorValue) {
+          showToast(t("saveFailed") + (errorValue && errorValue.message ? ": " + errorValue.message : ""));
+        });
+      }
+
+      function savePaperNote() {
+        if (noteDraft === null) return;
+        var text = noteDraft.text.trim().slice(0, 600);
+        if (text === "") return;
+        var notes = meta !== null && Array.isArray(meta.paperNotes) ? meta.paperNotes.slice() : [];
+        var now = Date.now();
+        if (noteDraft.id === null) {
+          notes.push({
+            id: newNoteId(),
+            text: text,
+            author: "human",
+            sourceSessionId: scope.sessionId === undefined ? "" : scope.sessionId,
+            sourceSessionTitle: "",
+            createdAt: now,
+            updatedAt: now
+          });
+        } else {
+          notes = notes.map(function (note) {
+            return note.id === noteDraft.id ? Object.assign({}, note, { text: text, updatedAt: now }) : note;
+          });
+        }
+        applyPaperNotes(notes);
+      }
+
+      function deletePaperNote(id) {
+        var notes = meta !== null && Array.isArray(meta.paperNotes) ? meta.paperNotes : [];
+        applyPaperNotes(notes.filter(function (note) { return note.id !== id; }));
       }
 
       function browseCode(path) {
@@ -2048,6 +2127,75 @@ window.__ModuleLoader__.load({
         showToast(ok ? t("askQueued") : t("askFailed"));
       }
 
+      function renderPaperNotesBody() {
+        var notes = meta === null || !Array.isArray(meta.paperNotes) ? [] : meta.paperNotes;
+        var rows = notes.slice().sort(function (a, b) { return b.updatedAt - a.updatedAt; });
+        var composer = noteDraft === null
+          ? null
+          : h(
+              "div",
+              { className: "pr-note-composer" },
+              h("textarea", {
+                className: "pr-note-input",
+                rows: 2,
+                autoFocus: true,
+                value: noteDraft.text,
+                placeholder: t("paperNotePlaceholder"),
+                onChange: function (event) { setNoteDraft({ id: noteDraft.id, text: event.target.value }); }
+              }),
+              h(
+                "div",
+                { className: "pr-note-compose-actions" },
+                h("button", { type: "button", className: "pr-btn pr-btn-primary pr-btn-sm", onClick: savePaperNote }, t("save")),
+                h("button", { type: "button", className: "pr-btn pr-btn-sm", onClick: function () { setNoteDraft(null); } }, t("cancel"))
+              )
+            );
+
+        return h(
+          "div",
+          { className: "pr-notes-body" },
+          noteDraft === null
+            ? h(
+                "button",
+                {
+                  type: "button",
+                  className: "pr-btn pr-btn-primary pr-btn-sm pr-note-new",
+                  onClick: function () { setNoteDraft({ id: null, text: "" }); }
+                },
+                t("newPaperNote")
+              )
+            : composer,
+          rows.length === 0 && noteDraft === null
+            ? h("div", { className: "pr-panel-empty" }, t("noPaperNotes"))
+            : h(
+                "div",
+                { className: "pr-note-list" },
+                rows.map(function (note) {
+                  return h(
+                    "div",
+                    { className: "pr-note-row", key: note.id },
+                    h("span", { className: "pr-note-row-mark" }, note.author === "ai" ? "AI" : "·"),
+                    h(
+                      "button",
+                      {
+                        type: "button",
+                        className: "pr-note-row-text pr-note-row-open",
+                        title: note.text,
+                        onClick: function () { setNoteDraft({ id: note.id, text: note.text }); }
+                      },
+                      note.text
+                    ),
+                    h(
+                      "div",
+                      { className: "pr-note-row-actions" },
+                      iconButton("trash", t("delete"), function () { deletePaperNote(note.id); }, { className: "pr-icon-btn pr-icon-btn-sm" })
+                    )
+                  );
+                })
+              )
+        );
+      }
+
       function renderNoteBody() {
         var ordered = annotations.slice().sort(function (a, b) {
           return a.page === b.page ? a.createdAt - b.createdAt : a.page - b.page;
@@ -2243,11 +2391,21 @@ window.__ModuleLoader__.load({
                 "button",
                 {
                   type: "button",
-                  className: "pr-panel-tab" + (panelTab === "notes" ? " pr-panel-tab-on" : ""),
-                  onClick: function () { setPanelTab("notes"); }
+                  className: "pr-panel-tab" + (panelTab === "annotations" ? " pr-panel-tab-on" : ""),
+                  onClick: function () { setPanelTab("annotations"); }
                 },
                 t("notesTab"),
                 h("span", { className: "pr-tab-count" }, String(annotations.length))
+              ),
+              h(
+                "button",
+                {
+                  type: "button",
+                  className: "pr-panel-tab" + (panelTab === "notes" ? " pr-panel-tab-on" : ""),
+                  onClick: function () { setPanelTab("notes"); }
+                },
+                t("paperNotesTab"),
+                h("span", { className: "pr-tab-count" }, String(meta === null ? 0 : meta.paperNotes.length))
               ),
               h(
                 "button",
@@ -2261,7 +2419,7 @@ window.__ModuleLoader__.load({
             ),
             iconButton("close", t("close"), function () { setNotesOpen(false); })
           ),
-          panelTab === "code" ? renderCodeBody() : renderNoteBody()
+          panelTab === "code" ? renderCodeBody() : panelTab === "notes" ? renderPaperNotesBody() : renderNoteBody()
         );
       }
 
@@ -2927,6 +3085,14 @@ window.__ModuleLoader__.load({
       ".pr-file-input{display:none}",
       ".pr-notes-panel{max-width:100%}",
       ".pr-note-list{display:flex;flex-direction:column;gap:1px}",
+      ".pr-notes-body{display:flex;flex-direction:column;gap:8px;padding:10px 12px;overflow:auto;min-height:0}",
+      ".pr-note-composer{display:flex;flex-direction:column;gap:6px}",
+      ".pr-note-input{width:100%;box-sizing:border-box;resize:vertical;border:1px solid var(--dsw-alias-border-l1);border-radius:7px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;padding:6px 8px;line-height:1.5}",
+      ".pr-note-compose-actions{display:flex;gap:6px}",
+      ".pr-btn-sm{padding:4px 9px;font-size:11.5px}",
+      ".pr-note-new{align-self:flex-start}",
+      ".pr-note-row-mark{flex:none;width:18px;text-align:center;font-size:10px;color:var(--dsw-alias-label-secondary)}",
+      ".pr-note-row-open{background:none;border:0;font:inherit;text-align:left;cursor:pointer;padding:0}",
       ".pr-note-row{display:flex;align-items:center;gap:6px;padding:5px 6px;border-radius:7px;cursor:pointer;min-width:0}",
       ".pr-note-row:hover{background:var(--dsw-alias-bg-layer-2)}",
       ".pr-note-row-text{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11.5px;color:var(--dsw-alias-label-primary)}",

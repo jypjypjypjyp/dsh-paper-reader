@@ -39,6 +39,9 @@ const MAX_UPLOAD = 160 * 1024 * 1024
 const MAX_META_BODY = 8 * 1024 * 1024
 /** Upper bound on stored annotations per paper. */
 const MAX_ANNOTATIONS = 2000
+/** Paper-level notes: short conclusions that outlive one session. */
+const MAX_PAPER_NOTES = 500
+const MAX_NOTE_CHARS = 600
 
 /** Settings file next to the papers; it never leaves this machine. */
 const SETTINGS_PATH = join(STORE_DIR, 'settings.json')
@@ -282,6 +285,7 @@ function normalizeMeta(meta, id) {
     lastPage: Number.isInteger(meta.lastPage) && meta.lastPage > 0 ? meta.lastPage : 1,
     scrollRatio: Number.isFinite(meta.scrollRatio) ? Math.min(Math.max(meta.scrollRatio, 0), 1) : 0,
     annotations: Array.isArray(meta.annotations) ? meta.annotations.map(normalizeAnnotation).filter(Boolean) : [],
+    paperNotes: Array.isArray(meta.paperNotes) ? meta.paperNotes.map(normalizePaperNote).filter(Boolean).slice(0, MAX_PAPER_NOTES) : [],
     code: normalizeCode(meta.code),
     workDir: typeof meta.workDir === 'string' ? meta.workDir.slice(0, 4000) : '',
     parse: normalizeParse(meta.parse),
@@ -310,6 +314,21 @@ function normalizeParse(raw) {
     startedAt: Number.isFinite(value.startedAt) ? value.startedAt : 0,
     finishedAt: Number.isFinite(value.finishedAt) ? value.finishedAt : 0,
     error: typeof value.error === 'string' ? value.error.slice(0, 2000) : '',
+  }
+}
+
+function normalizePaperNote(raw) {
+  if (raw === null || typeof raw !== 'object') return undefined
+  const text = typeof raw.text === 'string' ? raw.text.trim().slice(0, MAX_NOTE_CHARS) : ''
+  if (text === '') return undefined
+  return {
+    id: typeof raw.id === 'string' && raw.id !== '' ? raw.id.slice(0, 80) : randomUUID(),
+    text,
+    author: raw.author === 'ai' ? 'ai' : 'human',
+    sourceSessionId: typeof raw.sourceSessionId === 'string' ? raw.sourceSessionId.slice(0, 80) : '',
+    sourceSessionTitle: typeof raw.sourceSessionTitle === 'string' ? raw.sourceSessionTitle.slice(0, 200) : '',
+    createdAt: Number.isFinite(raw.createdAt) ? raw.createdAt : Date.now(),
+    updatedAt: Number.isFinite(raw.updatedAt) ? raw.updatedAt : Date.now(),
   }
 }
 
@@ -361,6 +380,7 @@ function summaryOf(meta) {
     highlightCount: meta.annotations.filter((a) => a.kind === 'highlight').length,
     noteCount: meta.annotations.filter((a) => a.kind === 'note').length,
     aiCount: meta.annotations.filter((a) => a.author === 'ai').length,
+    paperNoteCount: meta.paperNotes.length,
     parseStatus: meta.parse.status,
     codeRepo: meta.code.repo,
   }
@@ -986,6 +1006,9 @@ async function handleApi(req, res, url, fence) {
       if (Number.isInteger(body.pageCount) && body.pageCount > 0) meta.pageCount = body.pageCount
       if (Number.isInteger(body.lastPage) && body.lastPage > 0) meta.lastPage = body.lastPage
       if (Number.isFinite(body.scrollRatio)) meta.scrollRatio = Math.min(Math.max(body.scrollRatio, 0), 1)
+      if (Array.isArray(body.paperNotes)) {
+        meta.paperNotes = body.paperNotes.map(normalizePaperNote).filter(Boolean).slice(0, MAX_PAPER_NOTES)
+      }
       if (Array.isArray(body.annotations)) {
         meta.annotations = body.annotations
           .slice(0, MAX_ANNOTATIONS)
@@ -1007,6 +1030,15 @@ async function handleApi(req, res, url, fence) {
       return true
     }
     sendError(res, 405, 'method not allowed', 'method-error')
+    return true
+  }
+
+  if (pathname === '/paper-reader/api/skill') {
+    if (req.method !== 'GET') {
+      sendError(res, 405, 'method not allowed', 'method-error')
+      return true
+    }
+    sendJson(res, 200, { ok: true, skill: { name: PAPER_SKILL_NAME, description: PAPER_SKILL_DESCRIPTION, content: PAPER_SKILL_BODY } })
     return true
   }
 
@@ -1164,7 +1196,9 @@ async function handleApi(req, res, url, fence) {
 const ANNOTATION_TOOL_DESCRIPTION = [
   'Read and write the paper reader\'s annotations (highlights and page notes) across sessions.',
   'Papers live in the reader sidebar tab; annotations are the durable, human-and-AI shared memory of what was read.',
-  'Use action="list" without docId to see the library, with docId to read one paper\'s annotations; then action="create" to leave a note the human will see in the reader at that page.',
+  'Use action="list" without docId to see the library, with docId to read one paper\'s annotations and notes; then action="create" to leave an annotation the human will see in the reader at that page.',
+  'Two layers of memory: an annotation is anchored to one page and carries the quoted text, a paper-level note (action="note") is a standalone sentence about the paper as a whole.',
+  'Keep both short: one sentence, 40 characters or fewer, conclusions and evidence only — never restate the paper.',
   'Use action="code" with docId and repo/path to record the code repository that implements a paper; without repo it returns the current link and the paper title.',
 ].join(' ')
 
@@ -1214,6 +1248,13 @@ async function runAnnotationTool(args, exec) {
       pageCount: meta.pageCount,
       code: meta.code,
       annotations,
+      notes: meta.paperNotes.map((note) => ({
+        id: note.id,
+        text: note.text,
+        author: note.author,
+        sessionTitle: note.sourceSessionTitle,
+        updatedAt: note.updatedAt,
+      })),
     }
   }
 
@@ -1243,6 +1284,47 @@ async function runAnnotationTool(args, exec) {
     meta.updatedAt = now
     await writeMeta(meta)
     return { ok: true, docId: id, created: { id: annotation.id, page: annotation.page, kind: annotation.kind } }
+  }
+
+  if (action === 'note') {
+    const id = docId(args.docId)
+    if (id === undefined) throw Object.assign(new Error('note needs a docId'), { status: 400 })
+    const text = typeof args.note === 'string' ? args.note.trim() : ''
+    if (text === '') throw Object.assign(new Error('note needs note text'), { status: 400 })
+    const meta = await readMeta(id)
+    if (meta.paperNotes.length >= MAX_PAPER_NOTES) throw Object.assign(new Error('note limit reached'), { status: 409 })
+    const now = Date.now()
+    const note = normalizePaperNote({
+      text,
+      author: 'ai',
+      sourceSessionId: sessionId,
+      sourceSessionTitle: typeof args.sessionTitle === 'string' ? args.sessionTitle : '',
+      createdAt: now,
+      updatedAt: now,
+    })
+    meta.paperNotes.push(note)
+    meta.updatedAt = now
+    await writeMeta(meta)
+    return { ok: true, docId: id, created: { id: note.id, text: note.text } }
+  }
+
+  if (action === 'update_note' || action === 'delete_note') {
+    const id = docId(args.docId)
+    if (id === undefined) throw Object.assign(new Error('needs a docId'), { status: 400 })
+    const noteId = typeof args.id === 'string' ? args.id : ''
+    const meta = await readMeta(id)
+    const index = meta.paperNotes.findIndex((note) => note.id === noteId)
+    if (index < 0) throw Object.assign(new Error(`no note ${noteId}`), { status: 404 })
+    if (action === 'delete_note') {
+      meta.paperNotes.splice(index, 1)
+    } else {
+      const text = typeof args.note === 'string' ? args.note.trim() : ''
+      if (text === '') throw Object.assign(new Error('update_note needs note text'), { status: 400 })
+      meta.paperNotes[index] = { ...meta.paperNotes[index], text: text.slice(0, MAX_NOTE_CHARS), updatedAt: Date.now() }
+    }
+    meta.updatedAt = Date.now()
+    await writeMeta(meta)
+    return { ok: true, docId: id, notes: meta.paperNotes }
   }
 
   if (action === 'code') {
@@ -1298,8 +1380,8 @@ function registerAnnotationTool(ctx) {
         properties: {
           action: {
             type: 'string',
-            enum: ['list', 'create', 'update', 'delete', 'code'],
-            description: 'list papers or one paper\'s annotations; create/update/delete a single annotation',
+            enum: ['list', 'create', 'update', 'delete', 'code', 'note', 'update_note', 'delete_note'],
+            description: "list papers, one paper's annotations and its notes; create/update/delete an annotation; note/update_note/delete_note manage paper-level notes", 
           },
           docId: { type: 'string', description: 'paper id from action="list"' },
           id: { type: 'string', description: 'annotation id, for update/delete' },
@@ -1308,7 +1390,7 @@ function registerAnnotationTool(ctx) {
           repo: { type: 'string', description: 'for action="code": open-source repository URL of this paper\'s implementation' },
           path: { type: 'string', description: 'for action="code": local directory holding the implementation' },
           text: { type: 'string', description: 'the quoted passage the annotation is about' },
-          note: { type: 'string', description: 'the annotation body, written in the user\'s language' },
+          note: { type: 'string', description: 'the annotation body, or the paper-level note text, written in the user\'s language and kept to one sentence' },
           sessionTitle: { type: 'string', description: 'short label of the current conversation' },
         },
         required: ['action'],
@@ -1338,11 +1420,42 @@ function registerAnnotationTool(ctx) {
   })
 }
 
+// ── the skill that teaches cross-session paper memory ────────────────────────
+
+const PAPER_SKILL_NAME = 'paper-memory'
+
+const PAPER_SKILL_DESCRIPTION = '用论文的高亮与笔记做跨会话记忆：怎么读、怎么写、写多短。'
+
+const PAPER_SKILL_BODY = `# 论文记忆
+
+标注（annotation）挂在某一页的一段原文上；笔记（note）是论文级的判断。两者都会跨会话保留。
+
+- 读：\`paper_annotations\` 不带 docId 列论文；带 docId 读该篇的 annotations 与 notes。接手新会话先读这两样，不要重读全文。
+- 写标注：\`action=create\`，\`page\` + \`text\`（原文引句）+ \`note\`（判断）。
+- 写笔记：\`action=note\`，\`note\` 一句话。
+- 长度：每条不超过 40 字，只写结论与依据；不复述原文，不写过程。
+- 时机：得出能改变判断的结论，或用户明确要求记下来时写。
+- 不写：推测、待验证的想法、与论文无关的闲聊。
+`
+
+/** Advertise the cross-session memory skill from this plugin's own runtime. */
+function registerPaperSkill(ctx) {
+  ctx.inject(['skills'], (skillCtx) => {
+    skillCtx.effect(() => skillCtx.skills.register({
+      name: PAPER_SKILL_NAME,
+      description: PAPER_SKILL_DESCRIPTION,
+      whenToUse: '读论文、写论文笔记、跨会话接着上次的结论继续时',
+      content: PAPER_SKILL_BODY,
+    }))
+  })
+}
+
 // ── plugin body ──────────────────────────────────────────────────────────────
 
 export function apply(ctx) {
   const trustedHosts = ctx.webStartup.trustedHosts ?? []
   registerAnnotationTool(ctx)
+  registerPaperSkill(ctx)
   ctx.effect(() => ctx.webServer.register({
     kind: 'prefix',
     path: '/paper-reader',

@@ -30,7 +30,8 @@ dsh plugin --profile web add link:./projects/dsh-paper-reader
 
 1. 打开右侧边栏，点 `+`，选「论文阅读器」。
 2. 点工具栏的上传按钮（或把 PDF 拖进面板）导入论文。
-3. 选中正文文字，使用浮出菜单；工具栏的 `</>` 打开「代码」，`@` 把论文目录写进输入框，`⋯` 里有「解析正文（MinerU）」与「设置」。
+3. 选中正文文字，使用浮出菜单；工具栏的 `</>` 打开「代码」，`@` 把论文目录和 `paper-memory` skill 写进输入框，`⋯` 里有「解析正文（MinerU）」与「设置」。
+4. 面板三栏：**标注**（挂在某页某段原文上的高亮与批注）、**笔记**（论文级的一句话结论，可多条，随时增删改）、**代码**。
 
 设置（工作目录、MinerU Token、模型、语言）统一放在左侧「插件」→ `dsh-paper-reader` 详情页，用 DSH 自带的设置表单渲染（`@deepseek-ai/dsh-client-ui-primitives` 的 `SettingsForm` / `SettingsValueField` / `SettingsSecretField`，与「网页搜索」等内置设置页同一套控件）；阅读器里的「设置」直接跳到那一页。
 
@@ -46,7 +47,13 @@ dsh plugin --profile web add link:./projects/dsh-paper-reader
 
 ## 批注工具
 
-`paper_annotations` 面向模型：`action=list` 不带 `docId` 列出论文库，带 `docId` 读该论文的全部批注；`action=create` 写一条（`page` + `text` + `note`，作者记为 AI）；`update` / `delete` 按批注 id 改删；`action=code` 读或写这篇论文的代码仓库（`repo` / `path`），阅读器「AI 查找仓库」按钮就是让 agent 走这条路自动回填。
+`paper_annotations` 面向模型：`action=list` 不带 `docId` 列出论文库，带 `docId` 读该论文的全部标注与笔记；`action=create` 写一条标注（`page` + `text` + `note`，作者记为 AI）；`update` / `delete` 按 id 改删；`action=note` / `update_note` / `delete_note` 管论文级笔记；`action=code` 读或写这篇论文的代码仓库（`repo` / `path`），阅读器「AI 查找仓库」按钮就是让 agent 走这条路自动回填。
+
+## 跨会话记忆 skill
+
+插件在 `apply()` 里用 `ctx.inject(['skills'])` + `ctx.skills.register()` 注册了一个运行时 skill `paper-memory`，内容是「怎么用标注和笔记做跨会话记忆、每条写多短」。它出现在 agent 的 skill 目录里，模型可以自行调用；点阅读器的 `@` 时，插件会把论文目录信息和这个 skill 的正文一起写进输入框，让模型当场按规则读旧记忆、写新记忆。
+
+规则很短：标注挂原文、笔记记判断，每条一句话不超过 40 字，只写结论与依据，不写推测与过程。
 
 ## 损坏的 PDF
 
