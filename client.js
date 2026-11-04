@@ -1665,8 +1665,18 @@ window.__ModuleLoader__.load({
           if (target >= previous[0] && target <= previous[1]) return previous;
           return [Math.max(1, target - 1), Math.min(pageSizes.length, target + 1)];
         });
-        var before = viewport.scrollTop;
-        viewport.scrollTop = Math.max(0, pageOffset(target) + share * (metrics === null ? 0 : metrics.height) - 8);
+        // If the viewport itself is not the scroller (some hosts scroll an ancestor),
+        // fall back to the nearest ancestor that actually has overflow.
+        var scroller = viewport;
+        if (scroller.scrollHeight <= scroller.clientHeight + 4) {
+          var node = viewport.parentElement;
+          while (node !== null && node !== document.body) {
+            if (node.scrollHeight > node.clientHeight + 4) { scroller = node; break; }
+            node = node.parentElement;
+          }
+        }
+        var before = scroller.scrollTop;
+        scroller.scrollTop = Math.max(0, pageOffset(target) + share * (metrics === null ? 0 : metrics.height) - 8);
         setCurrentPage(target);
         logJump({
           at: Date.now(),
@@ -1674,9 +1684,10 @@ window.__ModuleLoader__.load({
           el: pageEls.current[target] !== undefined,
           offset: Math.round(pageOffset(target)),
           before: Math.round(before),
-          after: Math.round(viewport.scrollTop),
-          clientHeight: viewport.clientHeight,
-          scrollHeight: viewport.scrollHeight,
+          after: Math.round(scroller.scrollTop),
+          scroller: scroller === viewport ? "viewport" : (scroller.className || scroller.tagName || "?").toString().slice(0, 40),
+          clientHeight: scroller.clientHeight,
+          scrollHeight: scroller.scrollHeight,
           width: Math.round(availableWidth)
         });
       }
