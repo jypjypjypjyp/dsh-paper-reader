@@ -1,0 +1,52 @@
+{
+  "name": "dsh-paper-reader",
+  "version": "0.1.0",
+  "description": "Paper reader tab for the DSH right sidebar: renders PDFs with their original layout and fonts, and offers highlight, note and ask-in-conversation on any selection.",
+  "type": "module",
+  "main": "index.js",
+  "icon": "./icon.svg",
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "icon.svg",
+    "public",
+    "README.md"
+  ],
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "better-sidebar",
+    "pdf",
+    "paper",
+    "reader"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "dsh-better-sidebar"
+      ]
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jypjypjypjyp/dsh-paper-reader.git"
+  },
+  "homepage": "https://github.com/jypjypjypjyp/dsh-paper-reader#readme",
+  "bugs": {
+    "url": "https://github.com/jypjypjypjyp/dsh-paper-reader/issues"
+  }
+}
