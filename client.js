@@ -1751,7 +1751,9 @@ window.__ModuleLoader__.load({
 
       var pageCount = pageSizes === null ? 0 : pageSizes.length;
       var parsing = parse !== null && parse.status === "running";
-      var mineruParsed = parse !== null && parse.status === "done" && parse.engine === "mineru";
+      // Reopening a paper trusts the files on disk, not just the last job record.
+      var mineruParsed = parse !== null && parse.engine === "mineru"
+        && (parse.status === "done" || (meta !== null && meta.hasMarkdown === true));
       // Clicking again while MinerU itself runs would only restart it; a local
       // parse stays interruptible, which is the switch this entry offers.
       var mineruBusy = parsing && parse.engine === "mineru";

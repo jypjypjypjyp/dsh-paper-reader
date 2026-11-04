@@ -492,6 +492,13 @@ async function paperBrief(id) {
   }
 }
 
+/** Whether this paper's markdown already exists, without materializing anything. */
+async function markdownExists(meta) {
+  if (meta.workDir === '') return false
+  const found = await findMarkdown(join(meta.workDir, 'markdown'))
+  return found !== ''
+}
+
 async function findMarkdown(dir) {
   const names = await readdir(dir, { withFileTypes: true }).catch(() => [])
   const direct = names.find((entry) => entry.isFile() && entry.name.toLowerCase() === 'paper.md')
@@ -952,7 +959,8 @@ async function handleApi(req, res, url, fence) {
     }
     if (req.method === 'GET') {
       try {
-        sendJson(res, 200, { ok: true, doc: await readMeta(id) })
+        const meta = await readMeta(id)
+        sendJson(res, 200, { ok: true, doc: { ...meta, hasMarkdown: await markdownExists(meta) } })
       } catch {
         sendError(res, 404, 'paper not found', 'not-found')
       }
