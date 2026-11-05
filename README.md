@@ -2,19 +2,21 @@
 
 ![Vibe Reading](docs/banner.png)
 
-右侧边栏里的 Vibe Reading（读论文的工作台）。打开一篇 PDF 后：
+右侧边栏里的论文工作台。PDF 原样打开，读到的留下，AI 接着用。
 
-- **原样呈现**：pdf.js 按页把 PDF 渲染成画布，排版、字体、插图、公式都不经过任何转换；上传的原始文件保存在 `~/.dsh/vibe-reading/`，不做改写。
-- **选中即用**：选中正文任意文字，浮出「高亮 / 笔记 / 提问」三个动作。
-- **高亮与笔记**：按页保存，跨缩放定位；「标注」页可回看、跳转、删除。
-- **在会话中提问**：把「请解释这段内容…」连同选段写进当前会话输入框，语言跟随界面语言。
-- **人机共管批注**：批注存在磁盘上，agent 通过 `vibe_reading` 工具读写，人在阅读器里读写，两边看到同一份；AI 写的批注带 `AI` 标签。
-- **原地跳转**：点标注行的页码或 ◎ 跳到那一页，同时收起面板让页面露出来；每条批注可复制 `vibe://<docId>@p<page>` 定位链接；点页面上的高亮弹出该条的引文、笔记与编辑入口。
-- **两套代码目录**：`remote/` 放开源实现（填仓库地址后点克隆，后台执行、状态行与按钮实时反馈），`local/` 放本地复现（默认启用）。两边都能浏览目录树，点文件就让 agent 对照论文读它。
-- **论文文件夹**：每篇论文一个文件夹，`pdf/` 原件、`markdown/` 正文抽取（可能带 `images/`）、`remote/` 开源代码、`local/` 本地复现，另有 `notes.md`（标注与笔记的唯一文档）与 `meta.md`（页数、关键词、仓库与解析状态）。工作目录根默认 `~/.paper_reading`，可在插件页里改。
-- **静默解析**：上传后自动用 markitdown 把 PDF 转成 Markdown，落在 `markdown/paper.md`；「更多 → 解析正文（MinerU）」会中断当前解析并改用 MinerU（需要 Token；调用在插件自己的 JS 里完成，不依赖 Python 脚本），底部进度条实时显示进度，解析期间 `@` 按钮置灰。
-- **`@` 一键带入**：工具栏的 `@` 往输入框写两行——`/dsh-vibe-reading` 手势与论文文件夹路径；目录里有什么由 skill 说明，提示词不带可能过时的副本。
-- **论文库**：全局保存所有导入的论文，支持继续阅读、下载原件、删除。
+## 人与 AI 共读，标注和笔记是同一份
+
+你划的高亮、写下的判断，AI 读得到；AI 读完整篇留下的标注与笔记，你打开就在页边。两边写进同一份 `notes.md`，用「AI / 你」区分作者——不用另开文档交接，也不用心疼对话滚没了。
+
+## 论文与代码放在一起
+
+看到模块想看实现：远程仓库克隆进 `remote/`，自己的复现放 `local/`，两套目录都能浏览。点一个文件，就让 agent 对照论文读它——从 claim 一路走到 kernel，不用切窗口复制粘贴。
+
+## 长在 DSH 生态里
+
+一个侧栏 tab、一个模型工具 `vibe_reading`、一个 skill `dsh-vibe-reading`。`@` 把 `/dsh-vibe-reading` 手势和论文目录写进输入框，正文由 DSH 的 skill 机制按需加载；MinerU 解析在插件自己的 JS 里跑，不依赖外部脚本；设置页复用 DSH 自带表单，跟内置设置同一套手感。
+
+还有：选中即高亮 / 笔记 / 提问（提示词语言跟随界面）、标注点页码原地跳转、`vibe://<docId>@p<page>` 深链、论文库网格与阅读位置记忆、损坏的 PDF 只提示不改写。
 
 ## 界面
 
@@ -43,7 +45,7 @@ dsh plugin --profile web add link:./projects/dsh-vibe-reading
 ## 使用
 
 1. 打开右侧边栏，点 `+`，选「Vibe Reading」。
-2. 点工具栏的上传按钮（或把 PDF 拖进面板）导入论文。
+2. 点工具栏的上传按钮（或把 PDF 拖进面板）导入论文。导入后静默用 markitdown 转一份 Markdown；「更多 → 解析正文（MinerU）」会中断它、改用 MinerU（要 Token），底部进度条实时走。
 3. 选中正文文字，使用浮出菜单；工具栏的 `</>` 打开「代码」页，`@` 把 `/dsh-vibe-reading` 与论文目录写进输入框，`⋯` 里有「解析正文（MinerU）」与「设置」。
 4. 面板三栏：**标注**（挂在某页某段原文上的高亮与批注，第二行显示它的笔记）、**笔记**（论文级的分块结论，可多条，随时增删改）、**代码**（再分「开源仓库 / 本地复现仓库」两个页签，各有目录浏览）。
 
@@ -57,7 +59,7 @@ dsh plugin --profile web add link:./projects/dsh-vibe-reading
 | `client.js` | Client：向 `ctx.betterSidebar` 注册 `vibe-reading` tab（阅读器、标注/代码面板），并向 `plugins.detail.section` 注册插件页里的「阅读器设置」 |
 | `public/` | vendored pdf.js 3.11（`pdf.min.js`、worker、cmaps、standard_fonts），Apache-2.0，许可证见 `public/LICENSE-pdfjs.txt` |
 
-存储：`~/.dsh/vibe-reading/` 是内部库（`<uuid>.pdf` 原件、`<uuid>.json` 元数据、`settings.json` 设置）；对外的论文文件夹在 `~/.paper_reading/<论文名>/`。
+存储：`~/.dsh/vibe-reading/` 是内部库（`<uuid>.pdf` 原件、`<uuid>.json` 元数据、`settings.json` 设置）；对外的论文文件夹在 `~/.paper_reading/<论文名>/`，按 `pdf/` 原件、`markdown/` 解析结果（可能带 `images/`）、`remote/` 开源实现、`local/` 本地复现分开放，标注与笔记统一写 `notes.md`、元信息写 `meta.md`。
 
 ## 批注工具
 
