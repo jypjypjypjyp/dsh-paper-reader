@@ -26,6 +26,8 @@ dsh plugin --profile web add link:./projects/dsh-vibe-reading
 
 装完重启一次 `dsh web`（Host 路由在启动时注册），右侧边栏的 `+` 里就有「Vibe Reading」。
 
+阅读器的入口挂在 better-sidebar 上，所以插件把 `dsh-better-sidebar` 声明成依赖：pnpm 装插件时会一并装下来。若目标 profile 里它还没被激活（插件列表里没有 `dsh-better-sidebar` 这一层），插件页会出现一条「缺少依赖：右侧边栏」的横幅，点「安装依赖」会自动跑 `dsh plugin --profile <名字> add dsh-better-sidebar` 并把它写进 `dsh.profile.bundles`，重启后生效；没有侧栏时插件本身照常加载，只是没有入口。
+
 ## 使用
 
 1. 打开右侧边栏，点 `+`，选「Vibe Reading」。

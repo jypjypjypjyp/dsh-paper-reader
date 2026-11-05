@@ -206,6 +206,13 @@ window.__ModuleLoader__.load({
         page: "第 {n} 页",
         settings: "设置",
         settingsTitle: "阅读器设置",
+        depsMissing: "缺少依赖：右侧边栏（dsh-better-sidebar）",
+        depsNotInstalled: "没有它就没有阅读器入口。装好后重启 DSH 生效。",
+        depsNotMounted: "包已安装但没挂进插件层，点安装补上。",
+        depsInstall: "安装依赖",
+        depsInstalling: "安装中…",
+        depsRestart: "安装完成，重启 DSH 后生效。",
+        depsMounted: "侧边栏已就绪",
         mineruSection: "MinerU 解析",
         mineruHint: "填入 MinerU 的 API Token 后，可在「更多」里把论文解析成 Markdown 与图片，供 agent 直接引用。Token 只保存在本机。",
         mineruKey: "API Token",
@@ -334,6 +341,13 @@ window.__ModuleLoader__.load({
         page: "Page {n}",
         settings: "Settings",
         settingsTitle: "Reader settings",
+        depsMissing: "Missing dependency: dsh-better-sidebar",
+        depsNotInstalled: "Without it the reader has no entry point. Restart DSH after installing.",
+        depsNotMounted: "Installed but not mounted; run the install to add it to the plugin layer.",
+        depsInstall: "Install dependency",
+        depsInstalling: "Installing…",
+        depsRestart: "Installed. Restart DSH to activate it.",
+        depsMounted: "Sidebar ready",
         mineruSection: "MinerU parsing",
         mineruHint: "With a MinerU API token the paper can be parsed into Markdown plus images from the More menu, so the agent can cite it directly. The token stays on this machine.",
         mineruKey: "API token",
@@ -2593,8 +2607,11 @@ window.__ModuleLoader__.load({
         if (ordered.length === 0) return h("div", { className: "pr-panel-empty" }, t("noAnnotations"));
         return h(
           "div",
-          { className: "pr-note-list" },
-          ordered.map(function (annotation) {
+          { className: "pr-panel-body" },
+          h(
+            "div",
+            { className: "pr-note-list" },
+            ordered.map(function (annotation) {
             var isNote = annotation.kind === "note";
             var isAi = annotation.author === "ai";
             var noteText = typeof annotation.note === "string" ? annotation.note : "";
@@ -2693,7 +2710,8 @@ window.__ModuleLoader__.load({
                 )
               )
             );
-          })
+            })
+          )
         );
       }
 
@@ -2893,7 +2911,7 @@ window.__ModuleLoader__.load({
           var block = renderTreeBlock(base);
           for (var index = 0; index < block.length; index += 1) children.push(block[index]);
         }
-        return h("div", { className: "pr-panel-body" }, children);
+        return h("div", { className: "pr-panel-body pr-panel-body-code" }, children);
       }
 
       function renderPanel() {
@@ -3426,12 +3444,91 @@ window.__ModuleLoader__.load({
      * Settings live on the plugin's own page in the Plugins panel, so the reader
      * stays a reader. The entry renders for its own bundle subject only.
      */
+    function DepsBanner(props) {
+      var ctx = props.ctx;
+      var langPair = useState(langOf(ctx));
+      var lang = langPair[0];
+      var setLang = langPair[1];
+      var statePair = useState(null);
+      var state = statePair[0];
+      var setState = statePair[1];
+      var busyPair = useState(false);
+      var busy = busyPair[0];
+      var setBusy = busyPair[1];
+      var notePair = useState("");
+      var note = notePair[0];
+      var setNote = notePair[1];
+
+      var t = function (key) { return textOf(lang, key); };
+
+      function install() {
+        if (busy) return;
+        setBusy(true);
+        setNote("");
+        sendJsonRequest(API_BASE + "deps/install", "POST", {}).then(function (value) {
+          setState({ ok: true, deps: value.deps, canInstall: false });
+          setNote(t("depsRestart"));
+        }).catch(function (error) {
+          setNote(String(error && error.message !== undefined ? error.message : error));
+        }).then(function () { setBusy(false); });
+      }
+
+      useEffect(function () {
+        var dispose = ctx.on("locale/change", function () { setLang(langOf(ctx)); });
+        getJson(API_BASE + "deps").then(function (value) { setState(value); }).catch(function () { setState({ ok: false }); });
+        return typeof dispose === "function" ? dispose : function () {};
+      }, []);
+
+      var deps = state !== null && state.deps !== undefined ? state.deps : null;
+      if (deps === null || deps.sidebar === undefined) return null;
+      if (deps.sidebar.mounted === true) {
+        if (note === "") return null;
+        return h(
+          "div",
+          { className: "pr-deps pr-deps-ok" },
+          h(
+            "div",
+            { className: "pr-deps-text" },
+            h("strong", null, t("depsMounted")),
+            h("span", null, note)
+          )
+        );
+      }
+      return h(
+        "div",
+        { className: "pr-deps" },
+        h(
+          "div",
+          { className: "pr-deps-text" },
+          h("strong", null, t("depsMissing")),
+          h("span", null, deps.sidebar.installed ? t("depsNotMounted") : t("depsNotInstalled"))
+        ),
+        h(
+          "div",
+          { className: "pr-deps-actions" },
+          state.canInstall === true
+            ? h(
+                "button",
+                { type: "button", className: "pr-btn pr-btn-primary pr-btn-sm", disabled: busy, onClick: install },
+                busy ? t("depsInstalling") : t("depsInstall")
+              )
+            : h("code", { className: "pr-deps-cmd" }, "dsh plugin --profile " + (state.profile || "web") + " add dsh-better-sidebar")
+        ),
+        note === "" ? null : h("div", { className: "pr-deps-note" }, note)
+      );
+    }
+
     function SettingsSection(props) {
       var subject = props.subject;
       var mine = subject !== undefined && subject !== null && subject.kind === "bundle"
         && subject.pkg !== undefined && subject.pkg !== null && subject.pkg.name === "dsh-vibe-reading";
       if (!mine) return null;
-      return h(SettingsForm, { ctx: props.ctx });
+      return h(
+        "div",
+        { className: "pr-set-wrap" },
+        h(DepsBanner, { ctx: props.ctx }),
+        h(SettingsForm, { ctx: props.ctx })
+      );
     }
 
     function SettingsForm(props) {
@@ -3705,7 +3802,7 @@ window.__ModuleLoader__.load({
       ".pr-pagepill{position:absolute;left:50%;bottom:10px;transform:translateX(-50%);display:flex;align-items:center;gap:1px;background:var(--dsw-alias-bg-overlay);border:1px solid var(--dsw-alias-border-l1);border-radius:999px;padding:2px;box-shadow:0 6px 20px rgba(0,0,0,.28);z-index:6}",
       ".pr-pagepill .pr-icon-btn{width:24px;height:22px;border-radius:999px}",
       ".pr-pagecount{font-size:11px;color:var(--dsw-alias-label-secondary);min-width:50px;text-align:center;font-variant-numeric:tabular-nums}",
-      ".pr-panel{position:absolute;inset:0;background:var(--dsw-alias-bg-layer-1);z-index:20;display:flex;flex-direction:column;min-height:0}",
+      ".pr-panel{position:absolute;inset:0;background:var(--dsw-alias-bg-layer-1);z-index:20;display:flex;flex-direction:column;min-height:0;overflow:hidden}",
       ".pr-panel-head{display:flex;align-items:center;gap:6px;padding:8px 10px;border-bottom:1px solid var(--dsw-alias-border-l1);flex:none}",
       ".pr-panel-title{font-weight:600;font-size:12.5px;flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
       ".pr-panel-empty{padding:28px 18px;text-align:center;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:1.6}",
@@ -3769,7 +3866,7 @@ window.__ModuleLoader__.load({
       ".pr-file-input{display:none}",
       ".pr-notes-panel{max-width:100%}",
       ".pr-note-list{display:flex;flex-direction:column;gap:1px}",
-      ".pr-notes-body{display:flex;flex-direction:column;gap:8px;padding:10px 12px;overflow:auto;min-height:0}",
+      ".pr-notes-body{display:flex;flex-direction:column;gap:8px;padding:10px 12px;flex:1 1 auto;overflow:auto;overscroll-behavior:contain;min-height:0}",
       ".pr-note-composer{display:flex;flex-direction:column;gap:6px}",
       ".pr-note-input{width:100%;box-sizing:border-box;resize:vertical;border:1px solid var(--dsw-alias-border-l1);border-radius:7px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;padding:6px 8px;line-height:1.5}",
       ".pr-note-compose-actions{display:flex;gap:6px}",
@@ -3828,12 +3925,21 @@ window.__ModuleLoader__.load({
       ".pr-code-actions{display:flex;flex-wrap:wrap;gap:6px;margin:2px 0 10px}",
       ".pr-tree-path{display:flex;align-items:center;gap:6px;padding:6px 0;border-top:1px solid var(--dsw-alias-border-l1);font-size:10.5px;color:var(--dsw-alias-label-secondary);min-width:0}",
       ".pr-tree-path span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
-      ".pr-tree{display:flex;flex-direction:column;gap:1px;overflow:auto;min-height:0}",
+      ".pr-tree{display:flex;flex-direction:column;gap:1px;flex:1 1 auto;overflow:auto;overscroll-behavior:contain;min-height:0}",
       ".pr-tree-row{display:flex;align-items:center;gap:6px;border:0;background:transparent;color:var(--dsw-alias-label-primary);font:inherit;font-size:11.5px;padding:4px 6px;border-radius:6px;cursor:pointer;text-align:left}",
       ".pr-tree-row:hover{background:var(--dsw-alias-bg-layer-2)}",
       ".pr-tree-name{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
       ".pr-tree-size{font-size:10px;color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums}",
-      ".pr-panel-body{flex:1 1 auto;overflow:auto;padding:8px 10px;min-height:0}",
+      ".pr-set-wrap{display:flex;flex-direction:column;gap:10px}",
+      ".pr-deps{display:flex;flex-direction:column;gap:6px;border:1px solid var(--dsw-alias-state-error-primary);border-radius:8px;padding:8px 10px;background:var(--dsw-alias-bg-layer-2)}",
+      ".pr-deps-text{display:flex;flex-direction:column;gap:2px;font-size:12px;color:var(--dsw-alias-label-primary)}",
+      ".pr-deps-text span{font-size:11.5px;color:var(--dsw-alias-label-secondary)}",
+      ".pr-deps-actions{display:flex;align-items:center;gap:6px;flex-wrap:wrap}",
+      ".pr-deps-cmd{font-size:11px;padding:3px 6px;border-radius:5px;background:var(--dsw-alias-bg-layer-1);max-width:100%;overflow:auto}",
+      ".pr-deps-note{font-size:11.5px;color:var(--dsw-alias-label-secondary)}",
+      ".pr-deps-ok{border-color:var(--dsw-alias-state-success-primary)}",
+      ".pr-panel-body{flex:1 1 auto;overflow:auto;overscroll-behavior:contain;padding:8px 10px;min-height:0}",
+      ".pr-panel-body-code{display:flex;flex-direction:column;gap:6px;overflow:hidden}",
       ".pr-crash{padding:18px;display:flex;flex-direction:column;gap:10px;font-size:12px;color:var(--dsw-alias-label-primary)}",
       ".pr-crash-title{font-weight:600;font-size:13px}",
       ".pr-crash-body{font-size:11.5px;line-height:1.6;color:var(--dsw-alias-state-error-primary);white-space:pre-wrap;word-break:break-word}",
@@ -3851,7 +3957,7 @@ window.__ModuleLoader__.load({
 
     // ── plugin registration ──────────────────────────────────────────────────
 
-    var inject = ["betterSidebar", "sessions", "locale", "slots"];
+    var inject = ["sessions", "locale", "slots"];
 
     function apply(ctx) {
       installErrorLog();
@@ -3871,8 +3977,9 @@ window.__ModuleLoader__.load({
         );
       });
 
-      ctx.effect(function () {
-        return ctx.betterSidebar.registerTab({
+      ctx.inject(["betterSidebar"], function (sidebarCtx) {
+      sidebarCtx.effect(function () {
+        return sidebarCtx.betterSidebar.registerTab({
           id: "vibe-reading",
           title: function () { return textOf(langOf(ctx), "tabTitle"); },
           description: function () { return textOf(langOf(ctx), "tabDesc"); },
@@ -3881,6 +3988,7 @@ window.__ModuleLoader__.load({
           single: true,
           component: PaperReaderTab
         });
+      });
       });
     }
 

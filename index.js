@@ -13,11 +13,11 @@
  * `<id>.json` carries the title, reading position and annotations.
  */
 import { spawn } from 'node:child_process'
-import { createReadStream } from 'node:fs'
+import { createReadStream, existsSync } from 'node:fs'
 import { appendFile, cp, mkdir, readFile, readdir, rename, rm, stat, unlink, writeFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { homedir } from 'node:os'
-import { dirname, extname, join, resolve, sep } from 'node:path'
+import { basename, delimiter, dirname, extname, join, resolve, sep } from 'node:path'
 import { inflateRawSync } from 'node:zlib'
 import { fileURLToPath } from 'node:url'
 
@@ -1062,12 +1062,189 @@ async function listDirectory(rawPath) {
 
 // ── route handler ────────────────────────────────────────────────────────────
 
+// ── dependency probe ────────────────────────────────────────────────────────
+
+/** Sidebar package whose service registers the reader tab. */
+const SIDEBAR_PACKAGE = 'dsh-better-sidebar'
+
+/** Harness home, honouring the sandbox override the same way other tools do. */
+function dshHome() {
+  const configured = process.env.DSH_HOME
+  return configured !== undefined && configured !== '' ? resolve(configured) : join(homedir(), '.dsh')
+}
+
+/** Profile manifests under DSH_HOME/profiles; unreadable entries are skipped. */
+async function listProfiles() {
+  const root = join(dshHome(), 'profiles')
+  let names = []
+  try {
+    names = await readdir(root)
+  } catch {
+    return []
+  }
+  const found = []
+  for (const profileName of names) {
+    try {
+      const manifest = JSON.parse(await readFile(join(root, profileName, 'package.json'), 'utf8'))
+      found.push({ name: profileName, dir: join(root, profileName), manifest })
+    } catch {
+      // not a profile directory
+    }
+  }
+  return found
+}
+
+/** The profile that owns this plugin: the one listing it as a dependency. */
+async function owningProfile() {
+  const profiles = await listProfiles()
+  if (profiles.length === 0) return undefined
+  return profiles.find((profile) => (profile.manifest.dependencies ?? {})[name] !== undefined) ?? profiles[0]
+}
+
+/** Bundle layers a profile selects. */
+function profileBundles(profile) {
+  const bundles = profile?.manifest?.dsh?.profile?.bundles
+  return Array.isArray(bundles) ? bundles : []
+}
+
+/** Range the plugin pins for the sidebar package. */
+async function sidebarRange() {
+  try {
+    const manifest = JSON.parse(await readFile(join(HERE, 'package.json'), 'utf8'))
+    const range = (manifest.dependencies ?? {})[SIDEBAR_PACKAGE]
+    return typeof range === 'string' && range !== '' ? range : 'latest'
+  } catch {
+    return 'latest'
+  }
+}
+
+/** How to run the CLI that started this host: command plus leading args. */
+function dshCommand() {
+  const override = process.env.DSH_BIN
+  if (override !== undefined && override !== '' && existsSync(override)) return { cmd: override, prefix: [] }
+  const entry = process.argv[1] ?? ''
+  if (basename(entry) === 'dsh' && existsSync(entry)) return { cmd: entry, prefix: [] }
+  // `dsh web` runs node on the CLI entry, so the same node plus that entry is the CLI.
+  if (entry !== '' && existsSync(entry) && /dsh[/\\](lib[/\\])?bin\.js$/.test(entry)) {
+    return { cmd: process.execPath, prefix: [entry] }
+  }
+  for (const dir of (process.env.PATH ?? '').split(delimiter)) {
+    if (dir === '') continue
+    const candidate = join(dir, 'dsh')
+    if (existsSync(candidate)) return { cmd: candidate, prefix: [] }
+  }
+  return undefined
+}
+
+/** Sidebar dependency state as the settings page shows it. */
+async function depsState() {
+  const profile = await owningProfile()
+  if (profile === undefined) {
+    return { ok: true, deps: { sidebar: { installed: false, mounted: false } }, canInstall: false, reason: 'no-profile' }
+  }
+  let version = null
+  try {
+    const manifest = JSON.parse(await readFile(join(profile.dir, 'node_modules', SIDEBAR_PACKAGE, 'package.json'), 'utf8'))
+    version = typeof manifest.version === 'string' ? manifest.version : null
+  } catch {
+    version = null
+  }
+  const mounted = profileBundles(profile).includes(SIDEBAR_PACKAGE)
+  const cli = dshCommand()
+  return {
+    ok: true,
+    deps: { sidebar: { package: SIDEBAR_PACKAGE, installed: version !== null, mounted, version } },
+    profile: profile.name,
+    canInstall: cli !== undefined && !mounted,
+    reason: cli === undefined ? 'no-dsh-command' : null,
+  }
+}
+
+/** Run one command to completion, keeping the tail of its output. */
+function runCommand(cli, args, cwd) {
+  return new Promise((settle) => {
+    const child = spawn(cli.cmd, [...cli.prefix, ...args], { cwd, env: process.env })
+    let output = ''
+    const collect = (chunk) => {
+      if (output.length < 8000) output += chunk.toString()
+    }
+    child.stdout?.on('data', collect)
+    child.stderr?.on('data', collect)
+    const timer = setTimeout(() => child.kill('SIGTERM'), 180_000)
+    child.on('error', (error) => {
+      clearTimeout(timer)
+      settle({ code: -1, output: output + '\n' + String(error) })
+    })
+    child.on('close', (code) => {
+      clearTimeout(timer)
+      settle({ code: code ?? -1, output })
+    })
+  })
+}
+
+/** Append the sidebar to the profile's bundle layers when the CLI left it out. */
+async function activateBundle(profile) {
+  const dependencies = profile.manifest.dependencies ?? {}
+  if (dependencies[SIDEBAR_PACKAGE] === undefined) return false
+  const manifestPath = join(profile.dir, 'package.json')
+  const manifest = JSON.parse(await readFile(manifestPath, 'utf8'))
+  const dsh = manifest.dsh ?? {}
+  const layer = dsh.profile ?? {}
+  const bundles = Array.isArray(layer.bundles) ? layer.bundles : []
+  if (bundles.includes(SIDEBAR_PACKAGE)) return false
+  const updated = {
+    ...manifest,
+    dsh: { ...dsh, profile: { ...layer, bundles: [...bundles, SIDEBAR_PACKAGE] } },
+  }
+  await writeFile(manifestPath, JSON.stringify(updated, undefined, 2) + '\n')
+  return true
+}
+
+/** Install the sidebar through the official CLI so bundle activation runs too. */
+async function installSidebar() {
+  const profile = await owningProfile()
+  if (profile === undefined) return { ok: false, error: 'no profile found' }
+  if (profileBundles(profile).includes(SIDEBAR_PACKAGE)) return { ok: true, already: true }
+  const cli = dshCommand()
+  if (cli === undefined) return { ok: false, error: 'dsh command not found' }
+  const spec = `${SIDEBAR_PACKAGE}@${await sidebarRange()}`
+  const result = await runCommand(cli, ['plugin', '--profile', profile.name, 'add', spec], profile.dir)
+  if (result.code !== 0) return { ok: false, output: result.output.slice(-2000) }
+  // The CLI only activates newly added dependencies; an already-declared package
+  // still needs its bundle layer, so make that idempotent step explicit.
+  await activateBundle(profile)
+  return { ok: true, output: result.output.slice(-2000) }
+}
+
 async function handleApi(req, res, url, fence) {
   if (!fence(req)) {
     sendError(res, 403, 'forbidden', 'forbidden')
     return true
   }
   const pathname = url.pathname
+
+  if (pathname === '/vibe-reading/api/deps') {
+    if (req.method !== 'GET') {
+      sendError(res, 405, 'method not allowed', 'method-error')
+      return true
+    }
+    sendJson(res, 200, await depsState())
+    return true
+  }
+
+  if (pathname === '/vibe-reading/api/deps/install') {
+    if (req.method !== 'POST') {
+      sendError(res, 405, 'method not allowed', 'method-error')
+      return true
+    }
+    const result = await installSidebar()
+    if (result.ok !== true) {
+      sendError(res, 500, result.error ?? 'install failed', 'install-failed')
+      return true
+    }
+    sendJson(res, 200, { ok: true, already: result.already === true, output: result.output ?? '', deps: (await depsState()).deps })
+    return true
+  }
 
   if (pathname === '/vibe-reading/api/library') {
     if (req.method !== 'GET') {
