@@ -1,5 +1,5 @@
 /*!
- * dsh-paper-reader — client half (browser bundle).
+ * dsh-vibe-reading — client half (browser bundle).
  *
  * Registers one "Paper reader" tab with dsh-better-sidebar. The tab renders
  * the uploaded PDF with pdf.js: every page is a canvas at device-pixel
@@ -10,10 +10,10 @@
  * Bundle format: the DSH client-bundle shape — a lazy-CJS closure registered
  * with window.__ModuleLoader__.load({ id, factory }). `react` / `react-dom`
  * resolve from the shell's module table; pdf.js is vendored under
- * /paper-reader/static and loaded on first use.
+ * /vibe-reading/static and loaded on first use.
  */
 window.__ModuleLoader__.load({
-  id: "dsh-paper-reader",
+  id: "dsh-vibe-reading",
   factory: (require) => {
     var module = { exports: {} };
     var exports = module.exports;
@@ -33,9 +33,9 @@ window.__ModuleLoader__.load({
 
     // ── constants ────────────────────────────────────────────────────────────
 
-    var STATIC_BASE = "/paper-reader/static/";
-    var API_BASE = "/paper-reader/api/";
-    var LAST_DOC_KEY = "dsh-paper-reader:last-doc";
+    var STATIC_BASE = "/vibe-reading/static/";
+    var API_BASE = "/vibe-reading/api/";
+    var LAST_DOC_KEY = "dsh-vibe-reading:last-doc";
     var HIGHLIGHT_COLOR = "#ffd54f";
     var NOTE_COLOR = "#7fd18a";
     var MAX_PROMPT_QUOTE = 4000;
@@ -131,7 +131,7 @@ window.__ModuleLoader__.load({
 
     var STRINGS = {
       zh: {
-        tabTitle: "论文阅读器",
+        tabTitle: "Vibe Reading",
         tabDesc: "原样阅读 PDF 论文，支持高亮、笔记与就选段向会话提问",
         library: "论文库",
         upload: "上传论文",
@@ -256,10 +256,10 @@ window.__ModuleLoader__.load({
         workRootLabel: "工作目录",
         workRootHint: "每篇论文在下面各占一个文件夹：pdf/ 放原文，markdown/ 放解析结果，code/ 放代码。默认 ~/.paper_reading。",
         parseDefaultHint: "上传后默认用 markitdown 静默转 Markdown；在阅读器里点「解析正文（MinerU）」会打断当前解析并改用 MinerU。",
-        linkCopied: "已复制 paper:// 链接"
+        linkCopied: "已复制 vibe:// 链接"
       },
       en: {
-        tabTitle: "Paper Reader",
+        tabTitle: "Vibe Reading",
         tabDesc: "Read PDF papers in their original layout, with highlights, notes and ask-in-conversation",
         library: "Papers",
         upload: "Upload paper",
@@ -384,7 +384,7 @@ window.__ModuleLoader__.load({
         workRootLabel: "Working folder",
         workRootHint: "Each paper gets one folder under this root: pdf/ keeps the original, markdown/ the extraction, code/ the code. Defaults to ~/.paper_reading.",
         parseDefaultHint: "Uploads convert silently with markitdown; choosing Parse text (MinerU) interrupts the current parse and switches engine.",
-        linkCopied: "paper:// link copied"
+        linkCopied: "vibe:// link copied"
       }
     };
 
@@ -657,7 +657,7 @@ window.__ModuleLoader__.load({
         });
         return true;
       } catch (error) {
-        console.warn("[dsh-paper-reader] composer insert failed:", error);
+        console.warn("[dsh-vibe-reading] composer insert failed:", error);
         return false;
       }
     }
@@ -742,7 +742,7 @@ window.__ModuleLoader__.load({
           if (cancelled) return null;
           return loadPdfLib()
             .then(function (pdfjs) {
-              return pdfjs.getDocument({ url: "/paper-reader/file?id=" + encodeURIComponent(docId) }).promise;
+              return pdfjs.getDocument({ url: "/vibe-reading/file?id=" + encodeURIComponent(docId) }).promise;
             })
             .then(function (document_) {
               return document_.getPage(1).then(function (page) {
@@ -925,7 +925,7 @@ window.__ModuleLoader__.load({
           if (!cancelled) setReadyTick(function (previous) { return previous + 1; });
         })().catch(function (error) {
           if (error && error.name === "RenderingCancelledException") return;
-          console.warn("[dsh-paper-reader] page render failed:", error);
+          console.warn("[dsh-vibe-reading] page render failed:", error);
         });
         return function () {
           cancelled = true;
@@ -1223,7 +1223,7 @@ window.__ModuleLoader__.load({
           setLibrary(body.docs === undefined ? [] : body.docs);
           return body.docs;
         }).catch(function (errorValue) {
-          console.warn("[dsh-paper-reader] library load failed:", errorValue);
+          console.warn("[dsh-vibe-reading] library load failed:", errorValue);
           setLibrary([]);
           return [];
         });
@@ -1236,7 +1236,7 @@ window.__ModuleLoader__.load({
           setSettings(value);
           return value;
         }).catch(function (errorValue) {
-          console.warn("[dsh-paper-reader] settings load failed:", errorValue);
+          console.warn("[dsh-vibe-reading] settings load failed:", errorValue);
           return null;
         });
       }
@@ -1276,7 +1276,7 @@ window.__ModuleLoader__.load({
         try {
           var navigation = ctx.get("pluginNavigation");
           if (navigation !== undefined && navigation !== null && typeof navigation.openBundle === "function") {
-            navigation.openBundle("dsh-paper-reader");
+            navigation.openBundle("dsh-vibe-reading");
             return;
           }
           var layout = ctx.get("layout");
@@ -1285,7 +1285,7 @@ window.__ModuleLoader__.load({
             return;
           }
         } catch (errorValue) {
-          console.warn("[dsh-paper-reader] settings navigation failed:", errorValue);
+          console.warn("[dsh-vibe-reading] settings navigation failed:", errorValue);
         }
         showToast(t("settingsFailed"));
       }
@@ -1325,7 +1325,7 @@ window.__ModuleLoader__.load({
           // the folder itself, so nothing here can drift from what is on disk.
           var gesture = value.skill !== null && value.skill !== undefined && typeof value.skill.name === "string" && value.skill.name !== ""
             ? "/" + value.skill.name
-            : "/dsh-paper-reading";
+            : "/dsh-vibe-reading";
           var text = lang === "zh"
             ? gesture + "\n论文工作目录：" + value.folder.path
             : gesture + "\nPaper folder: " + value.folder.path;
@@ -1448,7 +1448,7 @@ window.__ModuleLoader__.load({
             var docMeta = body.doc;
             return loadPdfLib().then(function (pdfjs) {
               var task = pdfjs.getDocument({
-                url: "/paper-reader/file?id=" + encodeURIComponent(id),
+                url: "/vibe-reading/file?id=" + encodeURIComponent(id),
                 cMapUrl: STATIC_BASE + "cmaps/",
                 cMapPacked: true,
                 standardFontDataUrl: STATIC_BASE + "standard_fonts/"
@@ -1674,7 +1674,7 @@ window.__ModuleLoader__.load({
 
       function logJump(entry) {
         try {
-          var key = "dsh-paper-reader:jumps";
+          var key = "dsh-vibe-reading:jumps";
           var log = JSON.parse(localStorage.getItem(key) || "[]");
           log.push(entry);
           localStorage.setItem(key, JSON.stringify(log.slice(-20)));
@@ -1803,7 +1803,7 @@ window.__ModuleLoader__.load({
             saveTimer.current = setTimeout(function () {
               if (docIdRef.current !== id) return;
               patchDoc(id, { annotations: next, allowEmpty: next.length === 0 }).catch(function (errorValue) {
-                console.warn("[dsh-paper-reader] annotation save failed:", errorValue);
+                console.warn("[dsh-vibe-reading] annotation save failed:", errorValue);
                 showToast(textOf(langOf(ctx), "saveFailed"));
               });
             }, 350);
@@ -2121,7 +2121,7 @@ window.__ModuleLoader__.load({
 
       function copyLocationLink(annotation) {
         var id = meta === null ? "" : meta.id;
-        var link = "paper://" + id + "@p" + annotation.page;
+        var link = "vibe://" + id + "@p" + annotation.page;
         function done(ok) {
           showToast(ok ? t("copied") + " " + link : t("copyFailed") + " " + link);
         }
@@ -2452,8 +2452,8 @@ window.__ModuleLoader__.load({
         var title = meta === null ? t("untitled") : meta.title;
         var baseline = meta !== null && meta.code !== undefined ? meta.code.repo : "";
         var prompt = lang === "zh"
-          ? "帮我确认这篇论文的官方开源实现，找到后调用 paper_annotations 工具（action=\"code\", docId=\"" + docId + "\", repo=\"<仓库地址>\"）把地址写回阅读器；找不到官方实现就直说，不要编造。\n\n论文：" + title
-          : "Find the official open-source implementation of this paper, then call the paper_annotations tool (action=\"code\", docId=\"" + docId + "\", repo=\"<url>\") to record it in the reader. If no official implementation exists, say so — do not invent one.\n\nPaper: " + title;
+          ? "帮我确认这篇论文的官方开源实现，找到后调用 vibe_reading 工具（action=\"code\", docId=\"" + docId + "\", repo=\"<仓库地址>\"）把地址写回阅读器；找不到官方实现就直说，不要编造。\n\n论文：" + title
+          : "Find the official open-source implementation of this paper, then call the vibe_reading tool (action=\"code\", docId=\"" + docId + "\", repo=\"<url>\") to record it in the reader. If no official implementation exists, say so — do not invent one.\n\nPaper: " + title;
         var ok = appendToComposer(ctx, scope.sessionId, prompt);
         showToast(ok ? t("askQueued") : t("askFailed"));
         if (ok) pollCode(baseline);
@@ -3032,14 +3032,14 @@ window.__ModuleLoader__.load({
               key: "version",
               className: "pr-menu-note"
             },
-            "dsh-paper-reader " + (pluginVersion === "" ? "" : "v" + pluginVersion)
+            "dsh-vibe-reading " + (pluginVersion === "" ? "" : "v" + pluginVersion)
           ));
           items.push(h(
             "a",
             {
               key: "download",
               className: "pr-menu-item",
-              href: "/paper-reader/file?id=" + encodeURIComponent(docId),
+              href: "/vibe-reading/file?id=" + encodeURIComponent(docId),
               download: meta.fileName || (meta.title + ".pdf"),
               onClick: function () { setMoreOpen(false); }
             },
@@ -3350,7 +3350,7 @@ window.__ModuleLoader__.load({
 
     // ── crash containment + error log ────────────────────────────────────────
 
-    var ERROR_LOG_KEY = "dsh-paper-reader:errors";
+    var ERROR_LOG_KEY = "dsh-vibe-reading:errors";
 
     function recordError(kind, message, stack) {
       try {
@@ -3392,7 +3392,7 @@ window.__ModuleLoader__.load({
 
       componentDidCatch(error, info) {
         recordError("render", error && error.message, (error && error.stack) + "\n" + (info && info.componentStack));
-        if (typeof console !== "undefined" && console.error) console.error("[dsh-paper-reader] render failed:", error, info);
+        if (typeof console !== "undefined" && console.error) console.error("[dsh-vibe-reading] render failed:", error, info);
       }
 
       render() {
@@ -3401,7 +3401,7 @@ window.__ModuleLoader__.load({
         return h(
           "div",
           { className: "pr-crash" },
-          h("div", { className: "pr-crash-title" }, "论文阅读器出错了 / Paper reader failed"),
+          h("div", { className: "pr-crash-title" }, "Vibe Reading 出错了 / Vibe Reading failed"),
           h("div", { className: "pr-crash-body" }, message.slice(0, 400)),
           h(
             "button",
@@ -3429,7 +3429,7 @@ window.__ModuleLoader__.load({
     function SettingsSection(props) {
       var subject = props.subject;
       var mine = subject !== undefined && subject !== null && subject.kind === "bundle"
-        && subject.pkg !== undefined && subject.pkg !== null && subject.pkg.name === "dsh-paper-reader";
+        && subject.pkg !== undefined && subject.pkg !== null && subject.pkg.name === "dsh-vibe-reading";
       if (!mine) return null;
       return h(SettingsForm, { ctx: props.ctx });
     }
@@ -3521,7 +3521,7 @@ window.__ModuleLoader__.load({
       var children = [];
       if (primitives !== null && typeof primitives.SettingsForm === "function") {
         children.push(h(primitives.SettingsValueField, {
-          id: "paper-reader-work-root",
+          id: "vibe-reading-work-root",
           label: t("workRootLabel"),
           hint: t("workRootHint"),
           text: editing.workRoot,
@@ -3536,7 +3536,7 @@ window.__ModuleLoader__.load({
           onReset: function () {}
         }));
         children.push(h(primitives.SettingsSecretField, {
-          id: "paper-reader-mineru-token",
+          id: "vibe-reading-mineru-token",
           label: t("mineruKey"),
           hint: t("mineruHint"),
           text: editing.mineruApiKey,
@@ -3546,7 +3546,7 @@ window.__ModuleLoader__.load({
           onEdit: function (value) { edit("mineruApiKey", value); }
         }));
         children.push(h(primitives.SettingsValueField, {
-          id: "paper-reader-mineru-model",
+          id: "vibe-reading-mineru-model",
           label: t("mineruModel"),
           hint: t("mineruModelHint"),
           text: editing.mineruModel,
@@ -3560,7 +3560,7 @@ window.__ModuleLoader__.load({
           onReset: function () {}
         }));
         children.push(h(primitives.SettingsValueField, {
-          id: "paper-reader-mineru-lang",
+          id: "vibe-reading-mineru-lang",
           label: t("mineruLang"),
           hint: t("mineruLangHint"),
           text: editing.mineruLang,
@@ -3858,7 +3858,7 @@ window.__ModuleLoader__.load({
 
       ctx.effect(function () {
         var style = document.createElement("style");
-        style.setAttribute("data-dsh-paper-reader", "");
+        style.setAttribute("data-dsh-vibe-reading", "");
         style.textContent = CSS;
         document.head.appendChild(style);
         return function () { style.remove(); };
@@ -3866,14 +3866,14 @@ window.__ModuleLoader__.load({
 
       ctx.slots.inject("plugins.detail.section", function () {
         return ctx.slots.register(
-          { name: "plugins.detail.section", id: "paper-reader-settings" },
+          { name: "plugins.detail.section", id: "vibe-reading-settings" },
           function (props) { return h(SettingsSection, { subject: props.subject, ctx: ctx }); }
         );
       });
 
       ctx.effect(function () {
         return ctx.betterSidebar.registerTab({
-          id: "paper-reader",
+          id: "vibe-reading",
           title: function () { return textOf(langOf(ctx), "tabTitle"); },
           description: function () { return textOf(langOf(ctx), "tabDesc"); },
           icon: function (size) { return h(Icon, { name: "book", size: size }); },

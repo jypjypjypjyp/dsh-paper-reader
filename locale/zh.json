@@ -1,7 +1,7 @@
 {
   "meta": {
-    "title": "论文阅读器",
-    "description": "从右侧边栏打开 PDF 论文，按原始排版阅读，并支持高亮、笔记与就选段向会话提问。"
+    "title": "Vibe Reading",
+    "description": "右侧边栏里的论文工作台：原样阅读 PDF，标注、笔记与关键词由人和 AI 共管，可跨会话复用。"
   },
   "errorHint": "文件可能已损坏或被截断（例如缺少 xref / EOF）。阅读器不会改动原件，可下载后用其它工具修复。",
   "downloadOriginal": "下载原件"

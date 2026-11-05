@@ -1,7 +1,7 @@
 {
   "meta": {
-    "title": "Paper Reader",
-    "description": "Read PDF papers from the right sidebar in their original layout, with highlights, notes and ask-in-conversation."
+    "title": "Vibe Reading",
+    "description": "A paper workspace in the DSH sidebar: read PDFs in their original layout; highlights, notes and keywords are shared between you and the agent across sessions."
   },
   "errorHint": "The file may be damaged or truncated (for example missing xref / EOF). The reader never modifies the original; download it and repair it with another tool.",
   "downloadOriginal": "Download original"

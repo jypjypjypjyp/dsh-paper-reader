@@ -1,14 +1,14 @@
 /**
- * dsh-paper-reader — host half.
+ * dsh-vibe-reading — host half.
  *
  * Serves everything the sidebar reader needs from one prefix route:
- *   /paper-reader/api/library   GET    paper index
- *   /paper-reader/api/upload    POST   raw PDF bytes -> stored paper
- *   /paper-reader/api/doc       GET/PATCH/DELETE  one paper's metadata + annotations
- *   /paper-reader/file          GET    original PDF bytes (Range capable)
- *   /paper-reader/static/*      GET    vendored pdf.js runtime, cmaps, standard fonts
+ *   /vibe-reading/api/library   GET    paper index
+ *   /vibe-reading/api/upload    POST   raw PDF bytes -> stored paper
+ *   /vibe-reading/api/doc       GET/PATCH/DELETE  one paper's metadata + annotations
+ *   /vibe-reading/file          GET    original PDF bytes (Range capable)
+ *   /vibe-reading/static/*      GET    vendored pdf.js runtime, cmaps, standard fonts
  *
- * Papers live outside any single workspace (`~/.dsh/paper-reader/`) so the
+ * Papers live outside any single workspace (`~/.dsh/vibe-reading/`) so the
  * library survives session switches: `<id>.pdf` is the untouched upload and
  * `<id>.json` carries the title, reading position and annotations.
  */
@@ -22,16 +22,16 @@ import { inflateRawSync } from 'node:zlib'
 import { fileURLToPath } from 'node:url'
 
 /** Plugin identity for the Loader row / client-modules keying. */
-export const name = 'dsh-paper-reader'
+export const name = 'dsh-vibe-reading'
 
 /** Route registration + the web startup's trusted-host fence. */
 export const inject = ['webServer', 'webStartup']
 
 const HERE = fileURLToPath(new URL('.', import.meta.url))
 const PUBLIC_DIR = join(HERE, 'public')
-const STORE_DIR = process.env.DSH_PAPER_READER_DIR !== undefined && process.env.DSH_PAPER_READER_DIR !== ''
-  ? resolve(process.env.DSH_PAPER_READER_DIR)
-  : join(homedir(), '.dsh', 'paper-reader')
+const STORE_DIR = process.env.DSH_VIBE_READING_DIR !== undefined && process.env.DSH_VIBE_READING_DIR !== ''
+  ? resolve(process.env.DSH_VIBE_READING_DIR)
+  : join(homedir(), '.dsh', 'vibe-reading')
 
 /** One upload may carry at most this many bytes. */
 const MAX_UPLOAD = 160 * 1024 * 1024
@@ -757,7 +757,7 @@ function stopParse(id, reason) {
 }
 
 /** MinerU cloud API root; the token is the only credential. */
-const MINERU_API = process.env.DSH_PAPER_READER_MINERU_API ?? 'https://mineru.net/api/v4'
+const MINERU_API = process.env.DSH_VIBE_READING_MINERU_API ?? 'https://mineru.net/api/v4'
 /** Polling cadence and ceiling for one MinerU batch. */
 const MINERU_POLL_MS = 3000
 const MINERU_DEADLINE_MS = 15 * 60 * 1000
@@ -1069,7 +1069,7 @@ async function handleApi(req, res, url, fence) {
   }
   const pathname = url.pathname
 
-  if (pathname === '/paper-reader/api/library') {
+  if (pathname === '/vibe-reading/api/library') {
     if (req.method !== 'GET') {
       sendError(res, 405, 'method not allowed', 'method-error')
       return true
@@ -1078,7 +1078,7 @@ async function handleApi(req, res, url, fence) {
     return true
   }
 
-  if (pathname === '/paper-reader/api/upload') {
+  if (pathname === '/vibe-reading/api/upload') {
     if (req.method !== 'POST') {
       sendError(res, 405, 'method not allowed', 'method-error')
       return true
@@ -1112,7 +1112,7 @@ async function handleApi(req, res, url, fence) {
     return true
   }
 
-  if (pathname === '/paper-reader/api/doc') {
+  if (pathname === '/vibe-reading/api/doc') {
     const id = docId(url.searchParams.get('id'))
     if (id === undefined) {
       sendError(res, 400, 'missing or invalid paper id', 'bad-id')
@@ -1183,7 +1183,7 @@ async function handleApi(req, res, url, fence) {
     return true
   }
 
-  if (pathname === '/paper-reader/api/telemetry') {
+  if (pathname === '/vibe-reading/api/telemetry') {
     if (req.method !== 'POST') {
       sendError(res, 405, 'method not allowed', 'method-error')
       return true
@@ -1196,7 +1196,7 @@ async function handleApi(req, res, url, fence) {
     return true
   }
 
-  if (pathname === '/paper-reader/api/version') {
+  if (pathname === '/vibe-reading/api/version') {
     if (req.method !== 'GET') {
       sendError(res, 405, 'method not allowed', 'method-error')
       return true
@@ -1208,7 +1208,7 @@ async function handleApi(req, res, url, fence) {
     return true
   }
 
-  if (pathname === '/paper-reader/api/skill') {
+  if (pathname === '/vibe-reading/api/skill') {
     if (req.method !== 'GET') {
       sendError(res, 405, 'method not allowed', 'method-error')
       return true
@@ -1217,7 +1217,7 @@ async function handleApi(req, res, url, fence) {
     return true
   }
 
-  if (pathname === '/paper-reader/api/settings') {
+  if (pathname === '/vibe-reading/api/settings') {
     if (req.method === 'GET') {
       sendJson(res, 200, { ok: true, settings: publicSettings(await readSettings()) })
       return true
@@ -1232,7 +1232,7 @@ async function handleApi(req, res, url, fence) {
     return true
   }
 
-  if (pathname === '/paper-reader/api/parse') {
+  if (pathname === '/vibe-reading/api/parse') {
     const id = docId(url.searchParams.get('id'))
     if (id === undefined) {
       sendError(res, 400, 'missing or invalid paper id', 'bad-id')
@@ -1268,7 +1268,7 @@ async function handleApi(req, res, url, fence) {
     return true
   }
 
-  if (pathname === '/paper-reader/api/paperdir') {
+  if (pathname === '/vibe-reading/api/paperdir') {
     if (req.method !== 'GET') {
       sendError(res, 405, 'method not allowed', 'method-error')
       return true
@@ -1286,7 +1286,7 @@ async function handleApi(req, res, url, fence) {
     return true
   }
 
-  if (pathname === '/paper-reader/api/code') {
+  if (pathname === '/vibe-reading/api/code') {
     if (req.method === 'GET') {
       const id = docId(url.searchParams.get('id'))
       if (id === undefined) {
@@ -1347,7 +1347,7 @@ async function handleApi(req, res, url, fence) {
     return true
   }
 
-  if (pathname === '/paper-reader/api/tree') {
+  if (pathname === '/vibe-reading/api/tree') {
     if (req.method !== 'GET') {
       sendError(res, 405, 'method not allowed', 'method-error')
       return true
@@ -1360,7 +1360,7 @@ async function handleApi(req, res, url, fence) {
     return true
   }
 
-  if (pathname === '/paper-reader/file') {
+  if (pathname === '/vibe-reading/file') {
     if (req.method !== 'GET' && req.method !== 'HEAD') {
       sendError(res, 405, 'method not allowed', 'method-error')
       return true
@@ -1391,14 +1391,14 @@ async function handleApi(req, res, url, fence) {
     return true
   }
 
-  if (pathname.startsWith('/paper-reader/static/')) {
+  if (pathname.startsWith('/vibe-reading/static/')) {
     if (req.method !== 'GET' && req.method !== 'HEAD') {
       sendError(res, 405, 'method not allowed', 'method-error')
       return true
     }
     let relative
     try {
-      relative = decodeURIComponent(pathname.slice('/paper-reader/static/'.length))
+      relative = decodeURIComponent(pathname.slice('/vibe-reading/static/'.length))
     } catch {
       sendError(res, 400, 'bad path', 'bad-path')
       return true
@@ -1700,7 +1700,7 @@ function registerAnnotationTool(ctx) {
     const tools = toolCtx.get('tools')
     if (tools === undefined || typeof tools.register !== 'function') return
     const definition = {
-      name: 'paper_annotations',
+      name: 'vibe_reading',
       description: ANNOTATION_TOOL_DESCRIPTION,
       parameters: {
         type: 'object',
@@ -1765,14 +1765,14 @@ function registerAnnotationTool(ctx) {
       toolCtx.effect(() => tools.register(definition))
     } catch (error) {
       // A deployment without the tools service still keeps every HTTP route.
-      toolCtx.logger?.warn?.('paper_annotations tool not registered: %s', error?.message ?? error)
+      toolCtx.logger?.warn?.('vibe_reading tool not registered: %s', error?.message ?? error)
     }
   })
 }
 
 // ── the skill that teaches cross-session paper memory ────────────────────────
 
-const PAPER_SKILL_NAME = 'dsh-paper-reading'
+const PAPER_SKILL_NAME = 'dsh-vibe-reading'
 
 const PAPER_SKILL_DESCRIPTION = '读一篇论文并把它读成标注与笔记：已读判断、逐节标注、论文级大笔记的完整工作流。'
 
@@ -1787,7 +1787,7 @@ const PAPER_SKILL_BODY = `# 论文阅读：把读到的内容写进标注与笔�
 - \`local/\`：本地复现代码（论文没开源、或自己想改一版时放这里），默认空。
 - \`pdf/\`：原始 PDF。
 
-\`paper_annotations (action="list", docId)\` 返回的 \`paths\` 指向这些位置。
+\`vibe_reading (action="list", docId)\` 返回的 \`paths\` 指向这些位置。
 
 ## 一、先查已读，再决定读不读
 
@@ -1876,7 +1876,7 @@ export function apply(ctx) {
   registerPaperSkill(ctx)
   ctx.effect(() => ctx.webServer.register({
     kind: 'prefix',
-    path: '/paper-reader',
+    path: '/vibe-reading',
     handler: async (req, res) => {
       try {
         const url = new URL(req.url ?? '/', 'http://dsh.internal')

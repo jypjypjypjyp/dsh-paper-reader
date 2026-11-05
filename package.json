@@ -1,7 +1,7 @@
 {
-  "name": "dsh-paper-reader",
-  "version": "0.2.11",
-  "description": "Paper reader tab for the DSH right sidebar: renders PDFs with their original layout and fonts, and offers highlight, note and ask-in-conversation on any selection.",
+  "name": "dsh-vibe-reading",
+  "version": "0.3.0",
+  "description": "Vibe Reading: a DSH sidebar workspace for reading papers — the PDF renders with its original layout and fonts, and highlights, notes, keywords and code links are shared with the agent across sessions.",
   "type": "module",
   "main": "index.js",
   "icon": "./icon.svg",
@@ -43,10 +43,10 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/jypjypjypjyp/dsh-paper-reader.git"
+    "url": "git+https://github.com/jypjypjypjyp/dsh-vibe-reading.git"
   },
-  "homepage": "https://github.com/jypjypjypjyp/dsh-paper-reader#readme",
+  "homepage": "https://github.com/jypjypjypjyp/dsh-vibe-reading#readme",
   "bugs": {
-    "url": "https://github.com/jypjypjypjyp/dsh-paper-reader/issues"
+    "url": "https://github.com/jypjypjypjyp/dsh-vibe-reading/issues"
   }
 }

@@ -1,6 +1,6 @@
-# dsh-paper-reader bundle patch — one Loader row whose package name matches
+# dsh-vibe-reading bundle patch — one Loader row whose package name matches
 # this package, so the client-modules scan serves ./client at
-# /plugins/dsh-paper-reader/client.js.
+# /plugins/dsh-vibe-reading/client.js.
 - insert:
-    - id: paper-reader
-      name: 'dsh-paper-reader'
+    - id: vibe-reading
+      name: 'dsh-vibe-reading'
