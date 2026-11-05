@@ -1,5 +1,7 @@
 # dsh-vibe-reading
 
+![Vibe Reading](docs/banner.png)
+
 右侧边栏里的 Vibe Reading（读论文的工作台）。打开一篇 PDF 后：
 
 - **原样呈现**：pdf.js 按页把 PDF 渲染成画布，排版、字体、插图、公式都不经过任何转换；上传的原始文件保存在 `~/.dsh/vibe-reading/`，不做改写。
@@ -13,6 +15,16 @@
 - **静默解析**：上传后自动用 markitdown 把 PDF 转成 Markdown，落在 `markdown/paper.md`；「更多 → 解析正文（MinerU）」会中断当前解析并改用 MinerU（需要 Token；调用在插件自己的 JS 里完成，不依赖 Python 脚本），底部进度条实时显示进度，解析期间 `@` 按钮置灰。
 - **`@` 一键带入**：工具栏的 `@` 往输入框写两行——`/dsh-vibe-reading` 手势与论文文件夹路径；目录里有什么由 skill 说明，提示词不带可能过时的副本。
 - **论文库**：全局保存所有导入的论文，支持继续阅读、下载原件、删除。
+
+## 界面
+
+![右侧边栏里的阅读器](docs/screens/00-hero.jpg)
+
+| 选中即用 | 标注与笔记 |
+| --- | --- |
+| ![](docs/screens/02-selection.jpg) | ![](docs/screens/03-annotations.jpg) |
+| **论文级笔记** | **代码：开源 / 本地两套目录** |
+| ![](docs/screens/04-notes.jpg) | ![](docs/screens/05-code.jpg) |
 
 ## 安装
 
