@@ -41,7 +41,7 @@ const MAX_META_BODY = 8 * 1024 * 1024
 const MAX_ANNOTATIONS = 2000
 /** Paper-level notes: short conclusions that outlive one session. */
 const MAX_PAPER_NOTES = 500
-const MAX_NOTE_CHARS = 600
+const MAX_NOTE_CHARS = 2000
 
 /** Settings file next to the papers; it never leaves this machine. */
 const SETTINGS_PATH = join(STORE_DIR, 'settings.json')
@@ -287,6 +287,9 @@ function normalizeMeta(meta, id) {
     annotations: Array.isArray(meta.annotations) ? meta.annotations.map(normalizeAnnotation).filter(Boolean) : [],
     paperNotes: Array.isArray(meta.paperNotes) ? meta.paperNotes.map(normalizePaperNote).filter(Boolean).slice(0, MAX_PAPER_NOTES) : [],
     code: normalizeCode(meta.code),
+    keywords: Array.isArray(meta.keywords)
+      ? meta.keywords.filter((word) => typeof word === 'string' && word.trim() !== '').map((word) => word.trim().slice(0, 24)).slice(0, 8)
+      : [],
     workDir: typeof meta.workDir === 'string' ? meta.workDir.slice(0, 4000) : '',
     parse: normalizeParse(meta.parse),
   }
@@ -294,11 +297,65 @@ function normalizeMeta(meta, id) {
 
 function normalizeCode(raw) {
   const value = raw !== null && typeof raw === 'object' ? raw : {}
+  const clone = value.clone !== null && typeof value.clone === 'object' ? value.clone : {}
+  const status = ['idle', 'running', 'done', 'error'].includes(clone.status) ? clone.status : 'idle'
   return {
     repo: typeof value.repo === 'string' ? value.repo.slice(0, 2000) : '',
-    path: typeof value.path === 'string' ? value.path.slice(0, 2000) : '',
     note: typeof value.note === 'string' ? value.note.slice(0, 20000) : '',
+    clone: {
+      status,
+      message: typeof clone.message === 'string' ? clone.message.slice(0, 500) : '',
+      startedAt: Number.isFinite(clone.startedAt) ? clone.startedAt : 0,
+      finishedAt: Number.isFinite(clone.finishedAt) ? clone.finishedAt : 0,
+    },
   }
+}
+
+/** Independent counts for the two code trees under the paper folder. */
+function codeCount(dir) {
+  return readdir(dir).then((entries) => entries.length).catch(() => 0)
+}
+
+/**
+ * The paper folder's meta file: everything a fresh session needs to know before
+ * it opens a single page, without asking the reader UI.
+ */
+function renderPaperMeta(meta, info) {
+  const keywords = Array.isArray(meta.keywords) ? meta.keywords : []
+  const parse = meta.parse === undefined ? { status: 'idle' } : meta.parse
+  const repo = meta.code.repo === '' ? '未关联' : meta.code.repo
+  const clone = meta.code.clone === undefined ? { status: 'idle' } : meta.code.clone
+  const cloneLine = clone.status === 'running'
+    ? '克隆中'
+    : clone.status === 'error'
+      ? `克隆失败：${clone.message}`
+      : clone.status === 'done'
+        ? '已克隆'
+        : '未克隆'
+  const parsedLabel = parse.status === 'done'
+    ? (info.markdown === '' ? '完成' : String(info.markdown).replace(info.dir + '/', ''))
+    : parse.status === 'running' ? '进行中' : '未解析'
+  return [
+    `# ${meta.title}`,
+    '',
+    `- paper id: ${meta.id}`,
+    `- 页数: ${meta.pageCount === null ? '未知' : meta.pageCount}`,
+    `- 领域关键词: ${keywords.length === 0 ? '（未标注）' : keywords.join('、')}`,
+    `- 开源仓库: ${repo}（${cloneLine}；remote/ ${info.remoteFiles} 项）`,
+    `- 本地复现: local/ ${info.localFiles} 项`,
+    `- 解析: ${parsedLabel}`,
+    `- 原文: pdf/${info.fileName}`,
+    '',
+    '## 目录',
+    '',
+    '- `pdf/` 原始 PDF',
+    '- `markdown/` 解析正文，可能带 `images/`',
+    '- `remote/` 开源实现（克隆来的）',
+    '- `local/` 本地复现代码',
+    '- `notes.md` 标注与笔记（唯一可读文档）',
+    '- `meta.md` 本文件',
+    '',
+  ].join('\n')
 }
 
 function normalizeParse(raw) {
@@ -323,6 +380,7 @@ function normalizePaperNote(raw) {
   if (text === '') return undefined
   return {
     id: typeof raw.id === 'string' && raw.id !== '' ? raw.id.slice(0, 80) : randomUUID(),
+    title: typeof raw.title === 'string' ? raw.title.trim().slice(0, 48) : '',
     text,
     author: raw.author === 'ai' ? 'ai' : 'human',
     sourceSessionId: '',
@@ -383,6 +441,7 @@ function summaryOf(meta) {
     paperNoteCount: meta.paperNotes.length,
     parseStatus: meta.parse.status,
     codeRepo: meta.code.repo,
+    keywords: meta.keywords,
   }
 }
 
@@ -466,16 +525,75 @@ function slugOf(meta) {
  * Materialize the paper's folder and return its parts. The folder is created
  * once and then reused, so renaming a paper never moves its files.
  */
+/**
+ * Clone in the background: a GitHub checkout takes long enough that the request
+ * must answer first and the UI poll for the status.
+ */
+async function startClone(id) {
+  const meta = await readMeta(id)
+  if (meta.code.repo === '' || !/^https?:\/\//i.test(meta.code.repo)) {
+    throw Object.assign(new Error('先在开源仓库一栏填一个 http(s) 地址'), { status: 400 })
+  }
+  if (meta.code.clone.status === 'running') return meta.code.clone
+  const folder = await paperFolder(id)
+  const existing = await readdir(folder.remoteDir).catch(() => [])
+  if (existing.length > 0) {
+    throw Object.assign(new Error('remote/ 已经有内容了'), { status: 409 })
+  }
+  const startedAt = Date.now()
+  meta.code = normalizeCode({ ...meta.code, clone: { status: 'running', message: '', startedAt, finishedAt: 0 } })
+  await writeMeta(meta)
+  const repo = meta.code.repo
+  void cloneInto(repo, folder.remoteDir)
+    .then(async () => {
+      const next = await readMeta(id)
+      next.code = normalizeCode({ ...next.code, clone: { status: 'done', message: '', startedAt, finishedAt: Date.now() } })
+      await writeMeta(next)
+      await paperBrief(id).catch(() => {})
+    })
+    .catch(async (error) => {
+      const next = await readMeta(id)
+      next.code = normalizeCode({ ...next.code, clone: { status: 'error', message: String(error?.message ?? error).slice(0, 400), startedAt, finishedAt: Date.now() } })
+      await writeMeta(next)
+      await paperBrief(id).catch(() => {})
+    })
+  return meta.code.clone
+}
+
+/** Shallow clone into the paper's code folder. */
+function cloneInto(repo, target) {
+  return new Promise((resolveClone, rejectClone) => {
+    const child = spawn('git', ['clone', '--depth', '1', repo, target], { stdio: ['ignore', 'ignore', 'pipe'] })
+    let stderr = ''
+    const timer = setTimeout(() => {
+      child.kill('SIGKILL')
+      rejectClone(Object.assign(new Error('git clone 超时（120 秒）'), { status: 504 }))
+    }, 120000)
+    child.stderr.on('data', (chunk) => { stderr += String(chunk) })
+    child.on('error', (error) => {
+      clearTimeout(timer)
+      rejectClone(Object.assign(new Error(`git clone 失败：${error.message}`), { status: 500 }))
+    })
+    child.on('close', (code) => {
+      clearTimeout(timer)
+      if (code === 0) resolveClone()
+      else rejectClone(Object.assign(new Error(`git clone 失败：${stderr.trim().split('\n').slice(-1)[0] || 'exit ' + code}`), { status: 500 }))
+    })
+  })
+}
+
 async function paperFolder(id) {
   const meta = await readMeta(id)
   const settings = await readSettings()
   const dir = meta.workDir !== '' ? meta.workDir : join(settings.workRoot, slugOf(meta))
   const pdfDir = join(dir, 'pdf')
   const mdDir = join(dir, 'markdown')
-  const codeDir = join(dir, 'code')
+  const remoteDir = join(dir, 'remote')
+  const localDir = join(dir, 'local')
   await mkdir(pdfDir, { recursive: true })
   await mkdir(mdDir, { recursive: true })
-  await mkdir(codeDir, { recursive: true })
+  await mkdir(remoteDir, { recursive: true })
+  await mkdir(localDir, { recursive: true })
 
   const rawName = (meta.fileName !== '' ? meta.fileName : 'paper.pdf').replace(/[\\/:*?"<>|]/g, ' ').trim()
   const fileName = rawName === '' ? 'paper.pdf' : rawName.toLowerCase().endsWith('.pdf') ? rawName : `${rawName}.pdf`
@@ -487,7 +605,7 @@ async function paperFolder(id) {
     meta.workDir = dir
     await writeMeta(meta).catch(() => {})
   }
-  return { meta, settings, dir, pdfDir, mdDir, codeDir, pdfTarget, fileName }
+  return { meta, settings, dir, pdfDir, mdDir, remoteDir, localDir, pdfTarget, fileName }
 }
 
 /** Refresh the folder's notes.md after annotations or notes change elsewhere. */
@@ -500,20 +618,24 @@ async function paperBrief(id) {
   const folder = await paperFolder(id)
   await writeFile(join(folder.dir, 'notes.md'), renderNotesMarkdown(folder.meta)).catch(() => {})
   const markdown = await findMarkdown(folder.mdDir)
-  const codeRepo = folder.meta.code.repo
-  const codePath = folder.meta.code.path
-  const codeInFolder = await readdir(folder.codeDir).catch(() => [])
-  await writeFile(join(folder.dir, 'README.md'), renderReadme(folder.meta, {
+  const remoteFiles = await codeCount(folder.remoteDir)
+  const localFiles = await codeCount(folder.localDir)
+  await writeFile(join(folder.dir, 'meta.md'), renderPaperMeta(folder.meta, {
+    dir: folder.dir,
     markdown,
-    codeRepo,
-    codePath,
-    codeFiles: codeInFolder.length,
+    fileName: folder.fileName,
+    remoteFiles,
+    localFiles,
   })).catch(() => {})
+  await rm(join(folder.dir, 'README.md'), { force: true }).catch(() => {})
   return {
     path: folder.dir,
     pdf: folder.pdfTarget,
     markdown,
-    code: { repo: codeRepo, path: codePath, note: folder.meta.code.note, files: codeInFolder.length },
+    remote: { path: folder.remoteDir, files: remoteFiles },
+    local: { path: folder.localDir, files: localFiles },
+    code: { repo: folder.meta.code.repo, clone: folder.meta.code.clone },
+    keywords: folder.meta.keywords,
     parse: folder.meta.parse,
   }
 }
@@ -546,42 +668,49 @@ async function findMarkdown(dir) {
   return ''
 }
 
-function renderNotesMarkdown(meta) {
-  const lines = [`# ${meta.title} — annotations`, '', `${meta.annotations.length} entries · exported ${new Date().toISOString()}`, '']
-  const ordered = meta.annotations.slice().sort((a, b) => (a.page === b.page ? a.createdAt - b.createdAt : a.page - b.page))
-  for (const annotation of ordered) {
-    const author = annotation.author === 'ai' ? 'AI' : 'human'
-    lines.push(`## page ${annotation.page} · ${annotation.kind} · ${author}`)
-    if (annotation.text !== '') lines.push('', `> ${annotation.text.replace(/\n/g, '\n> ')}`)
-    if (annotation.note !== '') lines.push('', annotation.note)
-
-    lines.push('')
-  }
-  return lines.join('\n')
+/** The paper's one readable document: big notes first, then page-ordered annotations. */
+function noteHeading(note) {
+  if (typeof note.title === 'string' && note.title !== '') return note.title
+  const enclosed = /^【([^】]{1,24})】/.exec(note.text)
+  if (enclosed !== null) return enclosed[1]
+  const prefixed = /^([^：:\n]{2,12})[：:]/.exec(note.text)
+  if (prefixed !== null) return prefixed[1]
+  if (/^已读/.test(note.text)) return '已读'
+  return '笔记'
 }
 
-function renderReadme(meta, info) {
-  const code = info.codeRepo !== '' || info.codePath !== ''
-    ? `- code: ${[info.codeRepo, info.codePath].filter(Boolean).join(' · ')}`
-    : '- code: not linked yet'
-  return [
-    `# ${meta.title}`,
-    '',
-    `- paper id: ${meta.id}`,
-    `- pages: ${meta.pageCount === null ? 'unknown' : meta.pageCount}`,
-    `- original file: pdf/${meta.fileName || 'paper.pdf'}`,
-    code,
-    `- annotations: ${meta.annotations.length}`,
-    `- markdown: ${info.markdown === '' ? 'not parsed yet' : info.markdown}`,
-    '',
-    '## Layout',
-    '',
-    '- `pdf/` the untouched upload',
-    '- `markdown/` text extraction (markitdown by default, MinerU on request)',
-    '- `code/` the linked repository or a local checkout',
-    '- `notes.md` every highlight and note, page ordered',
-    '',
-  ].join('\n')
+/** Drop a label the body repeats: the heading already carries it. */
+function bodyOfNote(note) {
+  const text = note.text
+  const heading = noteHeading(note)
+  for (const marker of [`${heading}：`, `${heading}:`, `【${heading}】`]) {
+    if (text.startsWith(marker)) return text.slice(marker.length).trim()
+  }
+  return text
+}
+
+function renderNotesMarkdown(meta) {
+  const stamp = new Date().toISOString()
+  const lines = [`# ${meta.title}`, '', `${meta.annotations.length} 条标注 · ${meta.paperNotes.length} 条笔记 · 更新于 ${stamp}`, '']
+  if (meta.paperNotes.length > 0) {
+    lines.push('## 笔记', '')
+    const notes = meta.paperNotes.slice().sort((a, b) => a.createdAt - b.createdAt)
+    for (const note of notes) {
+      lines.push(`### ${noteHeading(note)}`, '', bodyOfNote(note), '')
+    }
+  }
+  if (meta.annotations.length > 0) {
+    lines.push('## 标注', '')
+    const ordered = meta.annotations.slice().sort((a, b) => (a.page === b.page ? a.createdAt - b.createdAt : a.page - b.page))
+    for (const annotation of ordered) {
+      const author = annotation.author === 'ai' ? 'AI' : 'human'
+      lines.push(`### p${annotation.page} · ${annotation.kind} · ${author}`)
+      if (annotation.text !== '') lines.push('', `> ${annotation.text.replace(/\n/g, '\n> ')}`)
+      if (annotation.note !== '') lines.push('', annotation.note)
+      lines.push('')
+    }
+  }
+  return lines.join('\n')
 }
 
 // ── parsing: markitdown by default, MinerU on request ────────────────────────
@@ -1157,6 +1286,67 @@ async function handleApi(req, res, url, fence) {
     return true
   }
 
+  if (pathname === '/paper-reader/api/code') {
+    if (req.method === 'GET') {
+      const id = docId(url.searchParams.get('id'))
+      if (id === undefined) {
+        sendError(res, 400, 'missing or invalid paper id', 'bad-id')
+        return true
+      }
+      try {
+        const meta = await readMeta(id)
+        sendJson(res, 200, { ok: true, code: meta.code })
+      } catch {
+        sendError(res, 404, 'paper not found', 'not-found')
+      }
+      return true
+    }
+    if (req.method !== 'POST') {
+      sendError(res, 405, 'method not allowed', 'method-error')
+      return true
+    }
+    let body
+    try {
+      body = JSON.parse((await readBody(req, 64 * 1024)).toString('utf8') || '{}')
+    } catch {
+      sendError(res, 400, 'body must be JSON', 'bad-body')
+      return true
+    }
+    const id = docId(body.id)
+    if (id === undefined) {
+      sendError(res, 400, 'missing or invalid paper id', 'bad-id')
+      return true
+    }
+    try {
+      const action = typeof body.action === 'string' ? body.action : 'repo'
+      if (action === 'clone') {
+        const typed = typeof body.repo === 'string' ? body.repo.trim() : ''
+        if (typed !== '') {
+          const current = await readMeta(id)
+          if (typed !== current.code.repo) {
+            if (!/^https?:\/\//i.test(typed)) throw Object.assign(new Error('repo must be an http(s) URL'), { status: 400 })
+            current.code = normalizeCode({ ...current.code, repo: typed, clone: { status: 'idle', message: '', startedAt: 0, finishedAt: 0 } })
+            current.updatedAt = Date.now()
+            await writeMeta(current)
+          }
+        }
+        sendJson(res, 200, { ok: true, clone: await startClone(id), folder: await paperBrief(id) })
+        return true
+      }
+      const meta = await readMeta(id)
+      const repo = typeof body.repo === 'string' ? body.repo.trim() : meta.code.repo
+      if (repo !== '' && !/^https?:\/\//i.test(repo)) throw Object.assign(new Error('repo must be an http(s) URL'), { status: 400 })
+      const reset = repo !== meta.code.repo
+      meta.code = normalizeCode({ ...meta.code, repo, clone: reset ? { status: 'idle', message: '', startedAt: 0, finishedAt: 0 } : meta.code.clone })
+      meta.updatedAt = Date.now()
+      await writeMeta(meta)
+      sendJson(res, 200, { ok: true, folder: await paperBrief(id) })
+    } catch (error) {
+      sendError(res, Number.isInteger(error?.status) ? error.status : 500, error?.message ?? String(error), 'code-failed')
+    }
+    return true
+  }
+
   if (pathname === '/paper-reader/api/tree') {
     if (req.method !== 'GET') {
       sendError(res, 405, 'method not allowed', 'method-error')
@@ -1242,9 +1432,11 @@ async function handleApi(req, res, url, fence) {
 const ANNOTATION_TOOL_DESCRIPTION = [
   "Read and write one paper's annotations, highlights and paper-level notes; they are the durable shared memory of what was read.",
   'action="list" without docId lists the library; with docId it returns that paper\'s paths (pdf / markdown / code), annotations and notes — call it first to see whether the paper was already read.',
+  'action="search" looks for text across every paper\'s annotations and notes (pass docId to narrow it) — use it before reading to reuse what was already written.',
   'action="create" appends annotations, either one (page/text/note/kind) or a batch via items; text is the quoted passage, note is the judgement.',
-  'action="update"/"delete" change one annotation by id; action="note"/"update_note"/"delete_note" manage paper-level notes (write four structured notes per paper, not one-liners).',
-  'action="code" reads or records the repository that implements the paper (repo URL and/or local path).',
+  'action="update"/"delete" change one annotation by id; action="note"/"update_note"/"delete_note" manage paper-level notes (write one note per block — 论文简介 / 方法骨架 / 关键证据 / 正反辩论 / 怎么用 / 已读 — each with its title).',
+  'action="code" reads or records the open-source repository; the checkout itself lands in the paper folder\'s remote/ through the reader UI.',
+  'action="keywords" stores 3-6 domain keywords for the paper, shown on its library card; run it after reading.',
 ].join(' ')
 
 function toolText(value) {
@@ -1267,6 +1459,7 @@ async function runAnnotationTool(args, exec) {
           notes: doc.noteCount,
           aiNotes: doc.aiCount,
           parseStatus: doc.parseStatus,
+          keywords: doc.keywords,
         })),
       }
     }
@@ -1291,15 +1484,58 @@ async function runAnnotationTool(args, exec) {
       title: meta.title,
       pageCount: meta.pageCount,
       code: meta.code,
+      keywords: meta.keywords,
       paths: brief === undefined ? null : { dir: brief.path, pdf: brief.pdf, markdown: brief.markdown, code: brief.code },
       annotations,
       notes: meta.paperNotes.map((note) => ({
         id: note.id,
+        title: note.title,
         text: note.text,
         author: note.author,
         updatedAt: note.updatedAt,
       })),
     }
+  }
+
+  if (action === 'search') {
+    const query = typeof args.query === 'string' ? args.query.trim() : ''
+    if (query === '') throw Object.assign(new Error('search needs query'), { status: 400 })
+    const id = docId(args.docId)
+    const metas = id === undefined ? await Promise.all((await listLibrary()).map((doc) => readMeta(doc.id))) : [await readMeta(id)]
+    const needle = query.toLowerCase()
+    const hits = []
+    for (const meta of metas) {
+      for (const annotation of meta.annotations) {
+        if ((annotation.text + '\n' + annotation.note).toLowerCase().includes(needle)) {
+          hits.push({
+            type: 'annotation',
+            docId: meta.id,
+            paperTitle: meta.title,
+            id: annotation.id,
+            page: annotation.page,
+            kind: annotation.kind,
+            author: annotation.author,
+            text: annotation.text.slice(0, 400),
+            note: annotation.note.slice(0, 600),
+          })
+        }
+      }
+      for (const note of meta.paperNotes) {
+        if (note.text.toLowerCase().includes(needle)) {
+          hits.push({
+            type: 'note',
+            docId: meta.id,
+            paperTitle: meta.title,
+            id: note.id,
+            title: note.title,
+            author: note.author,
+            text: note.text.slice(0, 800),
+          })
+        }
+      }
+    }
+    const limit = Number.isInteger(args.limit) && args.limit > 0 ? Math.min(args.limit, 200) : 60
+    return { ok: true, query, total: hits.length, hits: hits.slice(0, limit) }
   }
 
   if (action === 'create') {
@@ -1311,12 +1547,23 @@ async function runAnnotationTool(args, exec) {
     const meta = await readMeta(id)
     const now = Date.now()
     const created = []
-    for (const item of batch) {
-      if (item === null || typeof item !== 'object') continue
+    const skipped = []
+    for (let index = 0; index < batch.length; index += 1) {
+      const item = batch[index]
+      if (item === null || typeof item !== 'object') {
+        skipped.push({ index, reason: 'not an object' })
+        continue
+      }
       const text = typeof item.text === 'string' ? item.text.trim() : ''
       const note = typeof item.note === 'string' ? item.note.trim() : ''
-      if (text === '' && note === '') continue
-      if (meta.annotations.length >= MAX_ANNOTATIONS) break
+      if (text === '' && note === '') {
+        skipped.push({ index, reason: 'needs text or note' })
+        continue
+      }
+      if (meta.annotations.length >= MAX_ANNOTATIONS) {
+        skipped.push({ index, reason: 'annotation limit reached' })
+        continue
+      }
       const page = Number.isInteger(item.page) && item.page > 0 ? Math.min(item.page, meta.pageCount ?? item.page) : 1
       const annotation = normalizeAnnotation({
         kind: item.kind === 'highlight' ? 'highlight' : 'note',
@@ -1328,15 +1575,21 @@ async function runAnnotationTool(args, exec) {
         createdAt: now,
         updatedAt: now,
       })
-      if (annotation === undefined) continue
+      if (annotation === undefined) {
+        skipped.push({ index, reason: 'could not be normalized' })
+        continue
+      }
       meta.annotations.push(annotation)
-      created.push({ id: annotation.id, page: annotation.page, kind: annotation.kind })
+      created.push({ id: annotation.id, page: annotation.page, kind: annotation.kind, text: annotation.text.slice(0, 60) })
     }
-    if (created.length === 0) throw Object.assign(new Error('create needs text or note'), { status: 400 })
+    if (created.length === 0) {
+      const reasons = skipped.map((entry) => `#${entry.index}: ${entry.reason}`).join('; ')
+      throw Object.assign(new Error(`nothing created — ${reasons}`), { status: 400 })
+    }
     meta.updatedAt = now
     await writeMeta(meta)
     await syncPaperNotes(meta)
-    return { ok: true, docId: id, created }
+    return { ok: true, docId: id, created, skipped }
   }
 
   if (action === 'note') {
@@ -1348,6 +1601,7 @@ async function runAnnotationTool(args, exec) {
     if (meta.paperNotes.length >= MAX_PAPER_NOTES) throw Object.assign(new Error('note limit reached'), { status: 409 })
     const now = Date.now()
     const note = normalizePaperNote({
+      title: typeof args.title === 'string' ? args.title.trim() : '',
       text,
       author: 'ai',
       createdAt: now,
@@ -1372,7 +1626,8 @@ async function runAnnotationTool(args, exec) {
     } else {
       const text = typeof args.note === 'string' ? args.note.trim() : ''
       if (text === '') throw Object.assign(new Error('update_note needs note text'), { status: 400 })
-      meta.paperNotes[index] = { ...meta.paperNotes[index], text: text.slice(0, MAX_NOTE_CHARS), updatedAt: Date.now() }
+      const title = typeof args.title === 'string' ? args.title.trim().slice(0, 48) : meta.paperNotes[index].title
+      meta.paperNotes[index] = { ...meta.paperNotes[index], title, text: text.slice(0, MAX_NOTE_CHARS), updatedAt: Date.now() }
     }
     meta.updatedAt = Date.now()
     await writeMeta(meta)
@@ -1380,21 +1635,39 @@ async function runAnnotationTool(args, exec) {
     return { ok: true, docId: id, notes: meta.paperNotes }
   }
 
+  if (action === 'keywords') {
+    const id = docId(args.docId)
+    if (id === undefined) throw Object.assign(new Error('keywords needs a docId'), { status: 400 })
+    const meta = await readMeta(id)
+    const raw = Array.isArray(args.keywords) ? args.keywords : typeof args.keywords === 'string' ? args.keywords.split(/[,，、]/) : []
+    const words = raw
+      .filter((word) => typeof word === 'string')
+      .map((word) => word.trim().slice(0, 24))
+      .filter((word) => word !== '')
+      .slice(0, 8)
+    meta.keywords = words
+    meta.updatedAt = Date.now()
+    await writeMeta(meta)
+    await paperBrief(id).catch(() => {})
+    return { ok: true, docId: id, keywords: words }
+  }
+
   if (action === 'code') {
     const id = docId(args.docId)
     if (id === undefined) throw Object.assign(new Error('code needs a docId'), { status: 400 })
     const meta = await readMeta(id)
     const repo = typeof args.repo === 'string' ? args.repo.trim() : ''
-    const localPath = typeof args.path === 'string' ? args.path.trim() : ''
-    if (repo === '' && localPath === '') {
+    if (repo === '') {
       return { ok: true, docId: id, title: meta.title, pageCount: meta.pageCount, code: meta.code }
     }
-    if (repo !== '' && !/^https?:\/\//i.test(repo)) {
+    if (!/^https?:\/\//i.test(repo)) {
       throw Object.assign(new Error('repo must be an http(s) URL'), { status: 400 })
     }
-    meta.code = normalizeCode({ repo: repo !== '' ? repo : meta.code.repo, path: localPath !== '' ? localPath : meta.code.path, note: meta.code.note })
+    const reset = repo !== meta.code.repo
+    meta.code = normalizeCode({ ...meta.code, repo, clone: reset ? { status: 'idle', message: '', startedAt: 0, finishedAt: 0 } : meta.code.clone })
     meta.updatedAt = Date.now()
     await writeMeta(meta)
+    await paperBrief(id).catch(() => {})
     return { ok: true, docId: id, title: meta.title, code: meta.code }
   }
 
@@ -1434,10 +1707,17 @@ function registerAnnotationTool(ctx) {
         properties: {
           action: {
             type: 'string',
-            enum: ['list', 'create', 'update', 'delete', 'code', 'note', 'update_note', 'delete_note'],
+            enum: ['list', 'search', 'create', 'update', 'delete', 'code', 'keywords', 'note', 'update_note', 'delete_note'],
             description: "list papers, one paper's annotations and its notes; create/update/delete an annotation; note/update_note/delete_note manage paper-level notes", 
           },
           docId: { type: 'string', description: 'paper id from action="list"' },
+          query: { type: 'string', description: 'for action="search": case-insensitive text to look for in annotations and notes' },
+          keywords: {
+            type: 'array',
+            description: 'for action="keywords": 3-6 domain keywords that place this paper in a field; replaces the stored list',
+            items: { type: 'string' },
+          },
+          limit: { type: 'integer', description: 'for action="search": max hits, default 60' },
           id: { type: 'string', description: 'annotation id, for update/delete' },
           page: { type: 'integer', description: '1-based page number' },
           items: {
@@ -1457,9 +1737,9 @@ function registerAnnotationTool(ctx) {
           },
           kind: { type: 'string', enum: ['note', 'highlight'], description: 'annotation kind, defaults to note' },
           repo: { type: 'string', description: 'for action="code": open-source repository URL of this paper\'s implementation' },
-          path: { type: 'string', description: 'for action="code": local directory holding the implementation' },
           text: { type: 'string', description: 'the quoted passage the annotation is about' },
           note: { type: 'string', description: 'the annotation body, or the paper-level note text, written in the user\'s language and kept to one sentence' },
+          title: { type: 'string', description: 'for note/update_note: the block heading, e.g. 论文简介 / 方法骨架 / 关键证据 / 正反辩论 / 怎么用 / 已读' },
         },
         required: ['action'],
         additionalProperties: false,
@@ -1471,7 +1751,9 @@ function registerAnnotationTool(ctx) {
             ok: { type: 'boolean' },
             papers: { type: 'array', items: { type: 'object', additionalProperties: true } },
             annotations: { type: 'array', items: { type: 'object', additionalProperties: true } },
-            created: { type: 'object', additionalProperties: true },
+            created: { type: 'array', items: { type: 'object', additionalProperties: true } },
+            skipped: { type: 'array', items: { type: 'object', additionalProperties: true } },
+            hits: { type: 'array', items: { type: 'object', additionalProperties: true } },
           },
           additionalProperties: true,
         },
@@ -1496,13 +1778,22 @@ const PAPER_SKILL_DESCRIPTION = '读一篇论文并把它读成标注与笔记�
 
 const PAPER_SKILL_BODY = `# 论文阅读：把读到的内容写进标注与笔记
 
-每篇论文的目录里有 \`pdf/\`、\`markdown/paper.md\`（可能带 \`images/\`）、\`code/\`。
-用 \`paper_annotations (action="list", docId)\` 拿到的 \`paths\` 指向它们。
+每篇论文的工作目录固定这几样，先按目录读，不要凭记忆猜内容：
+
+- \`meta.md\`：元信息——页数、领域关键词、开源仓库地址与克隆状态、解析状态、各目录内容计数。**必有**，先读它。
+- \`notes.md\`：标注与笔记的唯一文档，按「## 笔记 / ## 标注」分块，每次改动自动重写。
+- \`markdown/paper.md\`：解析正文，可能带 \`images/\`。
+- \`remote/\`：克隆下来的开源实现，可能是空的。
+- \`local/\`：本地复现代码（论文没开源、或自己想改一版时放这里），默认空。
+- \`pdf/\`：原始 PDF。
+
+\`paper_annotations (action="list", docId)\` 返回的 \`paths\` 指向这些位置。
 
 ## 一、先查已读，再决定读不读
 
 1. \`list\`（不带 docId）：拿到这篇的 docId、页数、标注与笔记数量。
 2. \`list\`（带 docId）：读全部 annotations、notes 与 paths。
+   要找「以前在哪篇写过 X」：\`search\` + \`query\`（可带 docId 限定单篇），命中会给 docId、页码与原文。
 3. 判定已读：notes 里有「已读」那条，且它覆盖了你要回答的章节与页码。
    - 已读且覆盖：直接用标注与笔记回答，附页码，**不重读**。
    - 只覆盖一部分：只补缺的章节，不从第一页重来。
@@ -1511,6 +1802,7 @@ const PAPER_SKILL_BODY = `# 论文阅读：把读到的内容写进标注与笔�
 ## 二、读
 
 读 \`paths.markdown\`；没有 markdown 就提示用户在阅读器里点解析，或按 PDF 页读。
+要看实现：先 \`ls remote/\`，空就看 \`local/\`；两边都空只说明还没人放代码，别当成论文没有实现。
 按节推进：摘要 → 引言 → 方法 → 实验 → 局限与结论。**每节读完立刻落标注**，不要攒到最后一起写。
 关键图（架构图、主结果、消融）在 \`markdown/images/\` 里，读到图所在小节时单独看一遍再标；公式与表格的数字直接引用原文。
 
@@ -1529,7 +1821,7 @@ const PAPER_SKILL_BODY = `# 论文阅读：把读到的内容写进标注与笔�
 
 ## 四、大笔记：按块写，一篇论文一组
 
-读完立刻写，**一块一条**（\`action="note"\`），标题就用方括号开头，六块齐全：
+读完立刻写，**一块一条**（\`action="note"\`，\`title\` 填块名，正文不要再重复块名），六块齐全：
 
 1. **【论文简介】** 解决什么问题、用什么方法、结论有多强（真机？大规模？单一任务？）。
 2. **【方法骨架】** 3–5 步或模块，写清输入输出与依赖顺序；关键设计选择说清为什么这么做。
@@ -1542,9 +1834,15 @@ const PAPER_SKILL_BODY = `# 论文阅读：把读到的内容写进标注与笔�
 6. **【已读】** \`已读 p1-pN；覆盖 X 节；未读 附录\`——下次靠它判断要不要重读。
 
 每条 2–5 句。大笔记不是摘要：写判断与取舍，让没读过的人也能据此行动。
+标注与笔记都落进论文目录的 \`notes.md\`——那是这篇论文唯一的可读文档，别在别处再存一份。
 同一篇论文只有这一组，不要写第二遍；有新认识就 \`update_note\` 改对应的那块。
 
-## 五、回答
+## 五、关键词：让这篇论文可被认出
+
+读完（标注与大笔记都落好）再跑一次 \`action="keywords"\`，\`keywords\` 给 3–6 个词：大领域 + 子方向 + 任务或数据名，例如 \`["VLA", "推理运行时", "Roofline", "机器人策略"]\`。
+它直接显示在论文库卡片上，也是以后 \`search\` 之外找论文的入口。写完再回答用户。
+
+## 六、回答
 
 细节问题先查标注与大笔记，不够再回原文补。答案里带页码，用户在阅读器里能直接点过去。
 

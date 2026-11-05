@@ -159,6 +159,21 @@ window.__ModuleLoader__.load({
         editNoteTitle: "编辑笔记",
         hlCardEmpty: "还没有笔记，点「编辑笔记」写一条",
         copied: "已复制链接",
+        codeClone: "克隆",
+        codeCloning: "克隆中…",
+        codeCloningLong: "正在克隆，通常 30–90 秒；成功后这里会变成「已克隆」",
+        codeCloneFailed: "克隆失败",
+        codeCloned: "已克隆到 remote/",
+        codeClonedShort: "已克隆",
+        codeNoRepo: "还没有仓库地址：先填地址，或让 AI 去找",
+        codeReady: "仓库已记录，可以克隆",
+        codeRemoteTab: "开源仓库",
+        codeLocalTab: "本地复现仓库",
+        codeLocalHint: "本地复现代码放这里：论文没开源、或你想自己实现一版时，都往这个目录放。",
+        codeWriteLocal: "让 AI 写一版",
+        codeRefresh: "刷新目录",
+        codeTreeEmpty: "这个目录还是空的",
+        noteTitlePlaceholder: "标题：论文简介 / 方法骨架 / 关键证据 / 正反辩论 / 怎么用 / 已读",
         copyFailed: "浏览器未允许写入剪贴板，请手动复制：",
         notePlaceholder: "写下对这段内容的理解、疑问或联想…",
         quote: "选段",
@@ -214,6 +229,7 @@ window.__ModuleLoader__.load({
         parseIdle: "未解析",
         atPath: "把论文目录写进输入框",
         pathBusy: "正在解析，稍后再插入论文目录",
+        pathAdded: "已把论文目录写进输入框",
         pathFailed: "读取论文目录失败",
         settingsFailed: "打不开设置页",
         codeTab: "代码",
@@ -226,9 +242,6 @@ window.__ModuleLoader__.load({
         noPaperNotes: "还没有笔记。读到结论时记一句，下次会话直接可读。",
         codeSection: "关联代码",
         codeRepo: "开源仓库地址",
-        codePath: "本地代码目录",
-        codeEmpty: "这篇论文还没有关联代码。开源就填仓库地址，闭源可以留空让 AI 自己写。",
-        codeSave: "保存关联",
         codeWrite: "让 AI 写实现",
         aiRepo: "AI 查找仓库",
         codeAskFile: "就这个文件提问",
@@ -274,6 +287,21 @@ window.__ModuleLoader__.load({
         editNoteTitle: "Edit note",
         hlCardEmpty: "No note yet — use Edit note to add one",
         copied: "Link copied",
+        codeClone: "Clone",
+        codeCloning: "Cloning…",
+        codeCloningLong: "Cloning now — usually 30–90 s; this line turns into \"cloned\" when it lands.",
+        codeCloneFailed: "Clone failed",
+        codeCloned: "Cloned into remote/",
+        codeClonedShort: "Cloned",
+        codeNoRepo: "No repository yet — paste a URL, or let the agent find one",
+        codeReady: "Repository recorded, ready to clone",
+        codeRemoteTab: "Open source",
+        codeLocalTab: "Local reproduction",
+        codeLocalHint: "Local reproduction code lives here: an implementation of your own, or when the paper ships none.",
+        codeWriteLocal: "Ask the agent to write one",
+        codeRefresh: "Refresh folder",
+        codeTreeEmpty: "This folder is empty",
+        noteTitlePlaceholder: "Heading: intro / method / evidence / debate / usage / read",
         copyFailed: "Clipboard write was blocked; copy manually:",
         notePlaceholder: "Write down what this passage makes you think…",
         quote: "Selection",
@@ -329,6 +357,7 @@ window.__ModuleLoader__.load({
         parseIdle: "Not parsed",
         atPath: "Insert the paper folder into the composer",
         pathBusy: "Parsing — insert the folder afterwards",
+        pathAdded: "Folder added to the composer",
         pathFailed: "Could not read the paper folder",
         settingsFailed: "Could not open the settings page",
         codeTab: "Code",
@@ -341,9 +370,6 @@ window.__ModuleLoader__.load({
         noPaperNotes: "No notes yet. Jot one line when a conclusion lands; the next session reads it.",
         codeSection: "Linked code",
         codeRepo: "Open-source repository",
-        codePath: "Local code directory",
-        codeEmpty: "No code linked yet. Point at the open-source repo, or leave it empty and let the agent write an implementation.",
-        codeSave: "Save link",
         codeWrite: "Ask the agent to implement",
         aiRepo: "Find repo with AI",
         codeAskFile: "Ask about this file",
@@ -1110,6 +1136,20 @@ window.__ModuleLoader__.load({
       var codeDraft = codeDraftPair[0];
       var setCodeDraft = codeDraftPair[1];
 
+      var codeTabPair = useState("remote");
+      var codeTab = codeTabPair[0];
+      var setCodeTab = codeTabPair[1];
+
+      // The paper folder as the host sees it: remote/ and local/ paths plus what
+      // each tree currently holds.
+      var folderPair = useState(null);
+      var folder = folderPair[0];
+      var setFolder = folderPair[1];
+
+      var cloneTickPair = useState(0);
+      var cloneTick = cloneTickPair[0];
+      var setCloneTick = cloneTickPair[1];
+
       var viewportRef = useRef(null);
       var bodyRef = useRef(null);
       var pageEls = useRef({});
@@ -1121,6 +1161,8 @@ window.__ModuleLoader__.load({
       var docIdRef = useRef(null);
       var fileInputRef = useRef(null);
       var autoOpenRef = useRef(false);
+      var cloneTimer = useRef(null);
+      var cloneBusyRef = useRef(false);
       var scrollFrame = useRef(0);
       var annotationsRef = useRef([]);
       var rootRef = useRef(null);
@@ -1276,33 +1318,22 @@ window.__ModuleLoader__.load({
           showToast(t("pathBusy"));
           return;
         }
-        var title = meta === null ? t("untitled") : meta.title;
         readPaperFolder(docId).then(function (folder) {
           return readSkill().catch(function () { return null; }).then(function (skill) { return { folder: folder, skill: skill }; });
         }).then(function (value) {
-          var folder = value.folder;
-          var skill = value.skill;
-          var lines = lang === "zh"
-            ? ["请阅读这篇论文的工作目录：" + folder.path, "", "- 论文：" + title, "- 原文：pdf/" + baseName(folder.pdf)]
-            : ["Read the working folder of this paper: " + folder.path, "", "- paper: " + title, "- original: pdf/" + baseName(folder.pdf)];
-          if (folder.markdown !== "") {
-            lines.push((lang === "zh" ? "- Markdown：" : "- markdown: ") + relativeTo(folder.path, folder.markdown));
-          } else {
-            lines.push(lang === "zh" ? "- Markdown：尚未解析" : "- markdown: not parsed yet");
-          }
-          if (folder.code.repo !== "") lines.push((lang === "zh" ? "- 代码仓库：" : "- code repository: ") + folder.code.repo);
-          else if (folder.code.path !== "") lines.push((lang === "zh" ? "- 本地代码：" : "- local code: ") + folder.code.path);
-          else lines.push(lang === "zh" ? "- 代码：论文未提供开源实现，可在 code/ 下按论文自行实现" : "- code: no official implementation; implement it under code/");
-          // The host turns a bare /skill-name gesture into a skill load, so the
-          // draft points at the skill instead of pasting its text.
-          var gesture = skill !== null && skill !== undefined && typeof skill.name === "string" && skill.name !== ""
-            ? "/" + skill.name
+          // The skill carries the folder layout; the prompt only has to hand over
+          // the folder itself, so nothing here can drift from what is on disk.
+          var gesture = value.skill !== null && value.skill !== undefined && typeof value.skill.name === "string" && value.skill.name !== ""
+            ? "/" + value.skill.name
             : "/dsh-paper-reading";
-          lines.unshift(gesture, "");
-          var ok = appendToComposer(ctx, scope.sessionId, lines.join("\n"));
-          showToast(ok ? t("askQueued") : t("askFailed"));
-        }).catch(function (errorValue) {
-          showToast(t("pathFailed") + (errorValue && errorValue.message ? ": " + errorValue.message : ""));
+          var text = lang === "zh"
+            ? gesture + "\n论文工作目录：" + value.folder.path
+            : gesture + "\nPaper folder: " + value.folder.path;
+          var ok = appendToComposer(ctx, scope.sessionId, text);
+          if (ok) {
+            showToast(t("pathAdded"));
+            dismissAtHint();
+          }
         });
       }
 
@@ -1329,13 +1360,15 @@ window.__ModuleLoader__.load({
 
       function savePaperNote() {
         if (noteDraft === null) return;
-        var text = noteDraft.text.trim().slice(0, 600);
+        var text = noteDraft.text.trim().slice(0, 2000);
+        var title = noteDraft.title.trim().slice(0, 48);
         if (text === "") return;
         var notes = meta !== null && Array.isArray(meta.paperNotes) ? meta.paperNotes.slice() : [];
         var now = Date.now();
         if (noteDraft.id === null) {
           notes.push({
             id: newNoteId(),
+            title: title,
             text: text,
             author: "human",
 
@@ -1344,7 +1377,7 @@ window.__ModuleLoader__.load({
           });
         } else {
           notes = notes.map(function (note) {
-            return note.id === noteDraft.id ? Object.assign({}, note, { text: text, updatedAt: now }) : note;
+            return note.id === noteDraft.id ? Object.assign({}, note, { title: title, text: text, updatedAt: now }) : note;
           });
         }
         applyPaperNotes(notes);
@@ -1360,26 +1393,6 @@ window.__ModuleLoader__.load({
           setTree(listing);
         }).catch(function (errorValue) {
           setTree({ path: path, entries: [], error: errorValue && errorValue.message ? errorValue.message : String(errorValue) });
-        });
-      }
-
-      function saveCodeLink() {
-        if (docId === null || codeDraft === null) return;
-        var previousNote = meta !== null && meta.code !== undefined ? meta.code.note : "";
-        var next = {
-          repo: typeof codeDraft.repo === "string" ? codeDraft.repo.trim() : "",
-          path: typeof codeDraft.path === "string" ? codeDraft.path.trim() : "",
-          note: previousNote
-        };
-        setMeta(function (previous) {
-          return previous === null ? previous : Object.assign({}, previous, { code: next });
-        });
-        patchDoc(docId, { code: next }).then(function () {
-          showToast(t("saved"));
-          if (next.path !== "") browseCode(next.path);
-          void refreshLibrary();
-        }).catch(function (errorValue) {
-          showToast(t("saveFailed") + (errorValue && errorValue.message ? ": " + errorValue.message : ""));
         });
       }
 
@@ -1426,6 +1439,8 @@ window.__ModuleLoader__.load({
         setPanelTab("annotations");
         setTree(null);
         setCodeDraft(null);
+        setFolder(null);
+        setCodeTab("remote");
         setSelection(null);
         setNoteEditor(null);
         return getJson(API_BASE + "doc?id=" + encodeURIComponent(id))
@@ -1458,6 +1473,7 @@ window.__ModuleLoader__.load({
                   setPdf(document_);
                   setPageSizes(sizes);
                   setMeta(Object.assign({}, docMeta, { pageCount: document_.numPages }));
+                  void refreshFolder();
                   setAnnotations(Array.isArray(docMeta.annotations) ? docMeta.annotations : []);
                   setDocId(id);
                   setZoom(1);
@@ -2384,6 +2400,15 @@ window.__ModuleLoader__.load({
           h("div", { className: "pr-doc-thumb" }, h(DocThumb, { docId: doc.id })),
           h("div", { className: "pr-doc-name" }, doc.title),
           h("div", { className: "pr-doc-meta" }, metaText),
+          Array.isArray(doc.keywords) && doc.keywords.length > 0
+            ? h(
+                "div",
+                { className: "pr-doc-tags" },
+                doc.keywords.slice(0, 3).map(function (word) {
+                  return h("span", { key: word, className: "pr-doc-tag", title: word }, word);
+                })
+              )
+            : null,
           h(
             "button",
             {
@@ -2406,7 +2431,7 @@ window.__ModuleLoader__.load({
         function tick() {
           tries += 1;
           getJson(API_BASE + "doc?id=" + encodeURIComponent(docId)).then(function (body) {
-            var next = body.doc !== undefined && body.doc.code !== undefined ? body.doc.code : { repo: "", path: "", note: "" };
+            var next = body.doc !== undefined && body.doc.code !== undefined ? body.doc.code : { repo: "", clone: { status: "idle" } };
             if (next.repo !== "" && next.repo !== baseline) {
               setMeta(function (previous) {
                 return previous === null ? previous : Object.assign({}, previous, { code: next });
@@ -2436,16 +2461,30 @@ window.__ModuleLoader__.load({
 
       function askImplement() {
         var title = meta === null ? t("untitled") : meta.title;
-        var code = meta !== null && meta.code !== undefined ? meta.code : { repo: "", path: "" };
+        var code = meta !== null && meta.code !== undefined ? meta.code : { repo: "" };
+        var localPath = folder === null ? "local/" : folder.local.path;
         var prompt = lang === "zh"
-          ? "请为这篇论文写一版最小可运行实现：先给模块划分与关键数据结构，再落代码，最后说明与论文不一致的取舍。\n\n论文：" + title + (code.repo !== "" ? "\n参考仓库：" + code.repo : "")
-          : "Write a minimal runnable implementation of this paper: module breakdown and key data structures first, then the code, then the trade-offs that differ from the paper.\n\nPaper: " + title + (code.repo !== "" ? "\nReference repo: " + code.repo : "");
+          ? "请为这篇论文写一版最小可运行实现，代码落到 " + localPath + "（本地复现目录）：先给模块划分与关键数据结构，再写文件，最后说明与论文不一致的取舍。\n\n论文：" + title + (code.repo !== "" ? "\n参考仓库：" + code.repo : "")
+          : "Write a minimal runnable implementation of this paper under " + localPath + " (the local reproduction folder): module breakdown and key data structures first, then the files, then the trade-offs that differ from the paper.\n\nPaper: " + title + (code.repo !== "" ? "\nReference repo: " + code.repo : "");
         var ok = appendToComposer(ctx, scope.sessionId, prompt);
         showToast(ok ? t("askQueued") : t("askFailed"));
       }
 
       // A paper note opens with a block label: 【论文简介】… or 价值：…; the label
       // is rendered bold and the rest follows inline.
+      // A note heading already says the label; drop it from the body when the
+      // text repeats it.
+      function noteBody(title, text) {
+        var heading = typeof title === "string" ? title : "";
+        var source = typeof text === "string" ? text : "";
+        if (heading === "") return source;
+        var markers = [heading + "：", heading + ":", "【" + heading + "】"];
+        for (var i = 0; i < markers.length; i += 1) {
+          if (source.indexOf(markers[i]) === 0) return source.slice(markers[i].length).trim();
+        }
+        return source;
+      }
+
       function blockOf(text) {
         var source = typeof text === "string" ? text : "";
         var enclosed = /^【([^】]{1,16})】\s*([\s\S]*)$/.exec(source);
@@ -2463,13 +2502,19 @@ window.__ModuleLoader__.load({
           : h(
               "div",
               { className: "pr-note-composer" },
+              h("input", {
+                className: "pr-input pr-note-title-input",
+                value: noteDraft.title,
+                placeholder: t("noteTitlePlaceholder"),
+                onChange: function (event) { setNoteDraft({ id: noteDraft.id, title: event.target.value, text: noteDraft.text }); }
+              }),
               h("textarea", {
                 className: "pr-note-input",
-                rows: 2,
+                rows: 6,
                 autoFocus: true,
                 value: noteDraft.text,
                 placeholder: t("paperNotePlaceholder"),
-                onChange: function (event) { setNoteDraft({ id: noteDraft.id, text: event.target.value }); }
+                onChange: function (event) { setNoteDraft({ id: noteDraft.id, title: noteDraft.title, text: event.target.value }); }
               }),
               h(
                 "div",
@@ -2488,7 +2533,7 @@ window.__ModuleLoader__.load({
                 {
                   type: "button",
                   className: "pr-btn pr-btn-primary pr-btn-sm pr-note-new",
-                  onClick: function () { setNoteDraft({ id: null, text: "" }); }
+                  onClick: function () { setNoteDraft({ id: null, title: "", text: "" }); }
                 },
                 t("newPaperNote")
               )
@@ -2510,20 +2555,25 @@ window.__ModuleLoader__.load({
                         tabIndex: 0,
                         className: "pr-note-row-text pr-note-row-open",
                         title: t("editNoteTitle"),
-                        onClick: function () { setNoteDraft({ id: note.id, text: note.text }); },
+                        onClick: function () { setNoteDraft({ id: note.id, title: note.title || "", text: note.text }); },
                         onKeyDown: function (event) {
                           if (event.key === "Enter" || event.key === " ") {
                             event.preventDefault();
-                            setNoteDraft({ id: note.id, text: note.text });
+                            setNoteDraft({ id: note.id, title: note.title || "", text: note.text });
                           }
                         }
                       },
-                      blockOf(note.text).label !== ""
+                      (note.title || "") !== ""
                         ? [
-                            h("span", { key: "t", className: "pr-note-block-title" }, blockOf(note.text).label),
-                            h("span", { key: "b" }, " " + blockOf(note.text).body)
+                            h("span", { key: "t", className: "pr-note-block-title" }, note.title),
+                            h("span", { key: "b", className: "pr-note-block-body" }, noteBody(note.title, note.text))
                           ]
-                        : note.text
+                        : blockOf(note.text).label !== ""
+                          ? [
+                              h("span", { key: "t", className: "pr-note-block-title" }, blockOf(note.text).label),
+                              h("span", { key: "b", className: "pr-note-block-body" }, blockOf(note.text).body)
+                            ]
+                          : note.text
                     ),
                     h(
                       "div",
@@ -2647,97 +2697,201 @@ window.__ModuleLoader__.load({
         );
       }
 
-      function renderCodeBody() {
-        var code = meta !== null && meta.code !== undefined ? meta.code : { repo: "", path: "", note: "" };
-        var draft = codeDraft === null ? { repo: code.repo, path: code.path } : codeDraft;
-        var children = [];
-        var listing = tree !== null ? tree : null;
-        var currentPath = code.path;
-        children.push(h(
-          "div",
-          { className: "pr-code-hint" },
-          code.repo === "" && currentPath === "" ? t("codeEmpty") : ""
-        ));
-        children.push(h(
-          "label",
-          { className: "pr-field" },
-          h("span", null, t("codeRepo")),
-          h("input", {
-            className: "pr-input",
-            value: draft.repo,
-            placeholder: "https://github.com/owner/repo",
-            onChange: function (event) { setCodeDraft({ repo: event.target.value, path: draft.path }); }
+      function switchCodeTab(tab) {
+        setCodeTab(tab);
+        setTree(null);
+        if (folder !== null) browseCode(tab === "remote" ? folder.remote.path : folder.local.path);
+      }
+
+      function refreshFolder() {
+        if (docId === null) return Promise.resolve(null);
+        return readPaperFolder(docId).then(function (value) {
+          setFolder(value);
+          return value;
+        }).catch(function () { return null; });
+      }
+
+      function startClone() {
+        if (docId === null) return;
+        var repo = codeDraft !== null ? codeDraft.repo.trim() : "";
+        var payload = { id: docId, action: "clone" };
+        if (repo !== "") payload.repo = repo;
+        cloneBusyRef.current = true;
+        setCloneTick(function (value) { return value + 1; });
+        showToast(t("codeCloning"));
+        fetch(API_BASE + "code", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(payload)
+        })
+          .then(function (response) { return response.json().then(function (data) { return { response: response, data: data }; }); })
+          .then(function (result) {
+            if (!result.response.ok) throw new Error(result.data && result.data.message ? result.data.message : "HTTP " + result.response.status);
+            void refreshFolder();
+            pollClone();
           })
-        ));
-        children.push(h(
-          "label",
-          { className: "pr-field" },
-          h("span", null, t("codePath")),
-          h("input", {
-            className: "pr-input",
-            value: draft.path,
-            placeholder: "~/Projects/... or /abs/path",
-            onChange: function (event) { setCodeDraft({ repo: draft.repo, path: event.target.value }); }
-          })
-        ));
-        children.push(h(
+          .catch(function (error) {
+            cloneBusyRef.current = false;
+            setCloneTick(function (value) { return value + 1; });
+            showToast(t("saveFailed") + (error && error.message ? ": " + error.message : ""));
+          });
+      }
+
+      function pollClone() {
+        if (cloneTimer.current !== null) clearTimeout(cloneTimer.current);
+        var tries = 0;
+        function tick() {
+          tries += 1;
+          getJson(API_BASE + "code?id=" + encodeURIComponent(docId)).then(function (body) {
+            var code = body.code !== undefined ? body.code : { repo: "", clone: { status: "idle" } };
+            setMeta(function (previous) {
+              return previous === null ? previous : Object.assign({}, previous, { code: code });
+            });
+            var status = code.clone !== undefined ? code.clone.status : "idle";
+            if (status === "running" && tries < 120) {
+              cloneTimer.current = setTimeout(tick, 1500);
+              return;
+            }
+            cloneBusyRef.current = false;
+            setCloneTick(function (value) { return value + 1; });
+            void refreshFolder().then(function (value) {
+              if (value !== null) browseCode(value.remote.path);
+            });
+            if (status === "done") showToast(t("codeCloned"));
+            if (status === "error") showToast(t("codeCloneFailed") + "：" + (code.clone.message || ""));
+          }).catch(function () {
+            if (tries < 120) cloneTimer.current = setTimeout(tick, 1500);
+            else { cloneBusyRef.current = false; setCloneTick(function (value) { return value + 1; }); }
+          });
+        }
+        cloneTimer.current = setTimeout(tick, 800);
+      }
+
+      function renderTreeBlock(base) {
+        var listing = tree;
+        var shown = listing !== null && listing.path !== undefined ? listing.path : base;
+        var children = [h(
           "div",
-          { className: "pr-code-actions" },
-          h("button", { type: "button", className: "pr-btn pr-btn-primary", onClick: saveCodeLink }, t("codeSave")),
-          h("button", { type: "button", className: "pr-btn", onClick: askImplement }, t("codeWrite")),
-          code.repo === ""
-            ? h("button", { type: "button", className: "pr-btn", onClick: askForRepo }, t("aiRepo"))
-            : null,
-          code.repo !== ""
-            ? h("a", { className: "pr-btn", href: code.repo, target: "_blank", rel: "noreferrer" }, t("codeOpenRepo"))
-            : null
-        ));
-        if (currentPath !== "") {
-          var shownPath = listing !== null ? listing.path : currentPath;
+          { className: "pr-tree-path" },
+          h(
+            "button",
+            {
+              type: "button",
+              className: "pr-icon-btn",
+              title: t("codeRefresh"),
+              onClick: function () { browseCode(base); }
+            },
+            h(Icon, { name: "refresh", size: 13 })
+          ),
+          h("span", { title: shown }, shown)
+        )];
+        if (listing !== null && listing.error !== undefined) {
+          children.push(h("div", { className: "pr-code-hint" }, listing.error));
+        } else if (listing !== null && Array.isArray(listing.entries) && listing.entries.length > 0) {
           children.push(h(
             "div",
-            { className: "pr-tree-path" },
-            h(
-              "button",
-              {
-                type: "button",
-                className: "pr-icon-btn",
-                title: t("codeUp"),
-                onClick: function () {
-                  var up = shownPath.replace(/\/[^/]+\/?$/, "");
-                  browseCode(up === "" ? "/" : up);
-                }
-              },
-              h(Icon, { name: "arrowUp", size: 13 })
-            ),
-            h("span", { title: shownPath }, shownPath)
+            { className: "pr-tree" },
+            listing.entries.map(function (entry) {
+              var isDir = entry.dir === true;
+              return h(
+                "button",
+                {
+                  key: entry.name,
+                  type: "button",
+                  className: "pr-tree-row",
+                  onClick: function () {
+                    if (isDir) browseCode(shown.replace(/\/+$/, "") + "/" + entry.name);
+                    else askAboutFile(entry);
+                  }
+                },
+                h(Icon, { name: isDir ? "folder" : "file", size: 13 }),
+                h("span", { className: "pr-tree-name" }, entry.name),
+                isDir ? null : h("span", { className: "pr-tree-size" }, formatBytes(entry.size))
+              );
+            })
           ));
-          if (listing !== null && listing.error !== undefined) {
-            children.push(h("div", { className: "pr-code-hint" }, listing.error));
-          } else if (listing !== null) {
-            children.push(h(
-              "div",
-              { className: "pr-tree" },
-              listing.entries.map(function (entry) {
-                var isDir = entry.dir === true;
-                return h(
-                  "button",
-                  {
-                    key: entry.name,
-                    type: "button",
-                    className: "pr-tree-row",
-                    onClick: function () {
-                      if (isDir) browseCode(shownPath.replace(/\/+$/, "") + "/" + entry.name);
-                      else askAboutFile(entry);
-                    }
-                  },
-                  h(Icon, { name: isDir ? "folder" : "file", size: 13 }),
-                  h("span", { className: "pr-tree-name" }, entry.name),
-                  isDir ? null : h("span", { className: "pr-tree-size" }, formatBytes(entry.size))
-                );
-              })
-            ));
+        } else if (listing !== null) {
+          children.push(h("div", { className: "pr-code-hint" }, t("codeTreeEmpty")));
+        }
+        return children;
+      }
+
+      function renderCodeBody() {
+        var code = meta !== null && meta.code !== undefined ? meta.code : { repo: "", clone: { status: "idle" } };
+        var clone = code.clone !== undefined ? code.clone : { status: "idle", message: "" };
+        var repo = codeDraft !== null ? codeDraft.repo : code.repo;
+        var running = clone.status === "running";
+        var hasRemote = folder !== null && folder.remote !== undefined && folder.remote.files > 0;
+        var base = folder === null ? null : (codeTab === "remote" ? folder.remote.path : folder.local.path);
+        var children = [];
+
+        children.push(h(
+          "div",
+          { className: "pr-seg" },
+          h(
+            "button",
+            { type: "button", className: "pr-seg-btn" + (codeTab === "remote" ? " pr-seg-on" : ""), onClick: function () { switchCodeTab("remote"); } },
+            t("codeRemoteTab")
+          ),
+          h(
+            "button",
+            { type: "button", className: "pr-seg-btn" + (codeTab === "local" ? " pr-seg-on" : ""), onClick: function () { switchCodeTab("local"); } },
+            t("codeLocalTab")
+          )
+        ));
+
+        if (codeTab === "remote") {
+          children.push(h(
+            "label",
+            { className: "pr-field" },
+            h("span", null, t("codeRepo")),
+            h("input", {
+              className: "pr-input",
+              value: repo,
+              placeholder: "https://github.com/owner/repo",
+              onChange: function (event) { setCodeDraft({ repo: event.target.value }); }
+            })
+          ));
+          var statusText = running
+            ? t("codeCloningLong")
+            : clone.status === "error"
+              ? t("codeCloneFailed") + "：" + clone.message
+              : clone.status === "done"
+                ? t("codeCloned")
+                : repo === "" ? t("codeNoRepo") : t("codeReady");
+          children.push(h(
+            "div",
+            { className: "pr-code-status" + (clone.status === "error" ? " pr-code-status-error" : "") },
+            statusText
+          ));
+          var actions = [h(
+            "button",
+            {
+              type: "button",
+              className: "pr-btn pr-btn-primary",
+              disabled: running || hasRemote || repo.trim() === "",
+              onClick: startClone
+            },
+            running ? t("codeCloning") : hasRemote ? t("codeClonedShort") : t("codeClone")
+          )];
+          if (repo.trim() === "") {
+            actions.push(h("button", { type: "button", className: "pr-btn", onClick: askForRepo }, t("aiRepo")));
+          } else {
+            actions.push(h("a", { className: "pr-btn", href: repo.trim(), target: "_blank", rel: "noreferrer" }, t("codeOpenRepo")));
           }
+          children.push(h("div", { className: "pr-code-actions" }, actions));
+        } else {
+          children.push(h("div", { className: "pr-code-hint" }, t("codeLocalHint")));
+          children.push(h(
+            "div",
+            { className: "pr-code-actions" },
+            h("button", { type: "button", className: "pr-btn", onClick: askImplement }, t("codeWriteLocal"))
+          ));
+        }
+
+        if (base !== null) {
+          var block = renderTreeBlock(base);
+          for (var index = 0; index < block.length; index += 1) children.push(block[index]);
         }
         return h("div", { className: "pr-panel-body" }, children);
       }
@@ -2778,7 +2932,12 @@ window.__ModuleLoader__.load({
                 {
                   type: "button",
                   className: "pr-panel-tab" + (panelTab === "code" ? " pr-panel-tab-on" : ""),
-                  onClick: function () { setPanelTab("code"); }
+                  onClick: function () {
+                    setPanelTab("code");
+                    void refreshFolder().then(function (value) {
+                      if (value !== null) browseCode(codeTab === "remote" ? value.remote.path : value.local.path);
+                    });
+                  }
                 },
                 t("codeTab")
               )
@@ -3558,6 +3717,8 @@ window.__ModuleLoader__.load({
       ".pr-doc-thumb-img{display:block;width:100%;height:100%;object-fit:contain;background:#fff}",
       ".pr-doc-thumb-ph{color:var(--dsw-alias-label-secondary)}",
       ".pr-doc-name{font-size:11.5px;font-weight:600;line-height:1.3;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;word-break:break-word}",
+      ".pr-doc-tags{display:flex;flex-wrap:wrap;gap:3px;margin-top:3px}",
+      ".pr-doc-tag{font-size:9.5px;line-height:1.4;padding:1px 5px;border-radius:6px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
       ".pr-doc-meta{font-size:10px;color:var(--dsw-alias-label-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
       ".pr-doc-del{position:absolute;top:4px;right:4px;width:22px;height:22px;display:flex;align-items:center;justify-content:center;border:1px solid var(--dsw-alias-border-l1);border-radius:6px;background:var(--dsw-alias-bg-overlay);color:var(--dsw-alias-label-secondary);font:inherit;font-size:10px;cursor:pointer;opacity:0;transition:opacity .12s}",
       ".pr-doc-card:hover .pr-doc-del,.pr-doc-del-confirm{opacity:1}",
@@ -3640,7 +3801,9 @@ window.__ModuleLoader__.load({
       ".pr-kind-note{color:var(--dsw-alias-state-success-primary)}",
       ".pr-note-row-body{margin-top:5px;font-size:11.5px;line-height:1.55;color:var(--dsw-alias-label-primary);white-space:pre-wrap;word-break:break-word}",
       ".pr-note-block{display:flex;flex-direction:column;gap:2px;min-width:0}",
-      ".pr-note-block-title{font-size:11.5px;font-weight:600;color:var(--dsw-alias-label-primary)}",
+      ".pr-note-block-title{display:block;font-size:11.5px;font-weight:600;color:var(--dsw-alias-label-primary);margin-bottom:2px}",
+      ".pr-note-block-body{display:block;font-size:11px;line-height:1.5;color:var(--dsw-alias-label-secondary);white-space:pre-wrap;word-break:break-word}",
+      ".pr-note-title-input{height:26px;font-size:11.5px;margin-bottom:4px}",
       ".pr-note-block-body{font-size:11px;line-height:1.5;color:var(--dsw-alias-label-secondary);display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;white-space:pre-wrap}",
       ".pr-note-row-note{margin-top:0;color:var(--dsw-alias-label-secondary);font-size:11px;line-height:1.45}",
       ".pr-note-row-quote{margin-top:4px;font-size:10.5px;line-height:1.5;color:var(--dsw-alias-label-secondary);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;word-break:break-word}",
@@ -3655,6 +3818,13 @@ window.__ModuleLoader__.load({
       ".pr-field-row{display:flex;gap:8px}",
       ".pr-field-row .pr-field{flex:1 1 0}",
       ".pr-input{border:1px solid var(--dsw-alias-border-l1);border-radius:7px;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font:inherit;font-size:12px;padding:6px 8px;min-width:0;width:100%;box-sizing:border-box}",
+      ".pr-seg{display:flex;gap:4px;padding:2px;border-radius:8px;background:var(--dsw-alias-bg-layer-2);margin-bottom:8px}",
+      ".pr-seg-btn{flex:1 1 0;min-width:0;height:24px;border:0;border-radius:6px;background:none;color:var(--dsw-alias-label-secondary);font:inherit;font-size:11.5px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}",
+      ".pr-seg-btn:hover{color:var(--dsw-alias-label-primary)}",
+      ".pr-seg-on{background:var(--dsw-alias-bg-overlay);color:var(--dsw-alias-label-primary);box-shadow:0 1px 3px rgba(0,0,0,.25)}",
+      ".pr-code-status{font-size:11px;line-height:1.45;color:var(--dsw-alias-label-secondary);margin:2px 0 6px}",
+      ".pr-code-status-error{color:var(--dsw-alias-state-error-primary,#e5484d)}",
+      ".pr-btn[disabled]{opacity:.5;cursor:not-allowed}",
       ".pr-code-actions{display:flex;flex-wrap:wrap;gap:6px;margin:2px 0 10px}",
       ".pr-tree-path{display:flex;align-items:center;gap:6px;padding:6px 0;border-top:1px solid var(--dsw-alias-border-l1);font-size:10.5px;color:var(--dsw-alias-label-secondary);min-width:0}",
       ".pr-tree-path span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
